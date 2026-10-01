@@ -9,12 +9,14 @@ import { markAfterPaint, markOnce } from "./lib/performance";
 import { installPreloadRecovery } from "./lib/preload-recovery";
 import { applyUiAppearance, watchSystemAppearance } from "./lib/ui-appearance";
 import { resolveUiLocale } from "./lib/ui-locale";
+import { applyUiTextSize, installUiTextSizeShortcuts } from "./lib/ui-text-size";
 import "./styles.css";
 
 markOnce("rk:renderer:module-evaluated");
 installPreloadRecovery();
 applyUiDirection(resolveUiLocale());
 applyUiAppearance();
+applyUiTextSize();
 
 function PerformanceProbe() {
   useLayoutEffect(() => {
@@ -29,10 +31,16 @@ function AppearanceSync() {
   return null;
 }
 
+function TextSizeSync() {
+  useEffect(() => installUiTextSizeShortcuts(), []);
+  return null;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <PerformanceProbe />
     <AppearanceSync />
+    <TextSizeSync />
     <I18nBootstrap>
       {/* Router state updates must not be transitions: under sustained urgent
           updates (SSE churn while a run streams) a pending navigation is

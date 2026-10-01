@@ -28,6 +28,14 @@ import {
   setUiAppearance,
 } from "../lib/ui-appearance";
 import { UI_LOCALE_LABELS, UI_LOCALES, type UiLocale } from "../lib/ui-locale";
+import {
+  UI_TEXT_SIZE_EVENT,
+  UI_TEXT_SIZE_MAX,
+  UI_TEXT_SIZE_MIN,
+  getUiTextSize,
+  setUiTextSize,
+  type UiTextSize,
+} from "../lib/ui-text-size";
 
 export type SettingsGeneralProps = {
   email?: string | null;
@@ -54,6 +62,7 @@ export function GeneralSettingsPanels({
   const [appearance, setAppearance] = useState<AppearancePreference>(() =>
     getUiAppearancePreference(),
   );
+  const [textSize, setTextSize] = useState<UiTextSize>(() => getUiTextSize());
   const [streamReplies, setStreamReplies] = useState(
     () => getResponseStreamingPreference() === "on",
   );
@@ -119,6 +128,19 @@ export function GeneralSettingsPanels({
           onChange={(next) => {
             setAppearance(next);
             setUiAppearance(next);
+          }}
+        />
+      </section>
+
+      <section className="rounded-xl border border-border px-4 py-4">
+        <h3 className="text-[15px] font-medium text-foreground">
+          <Trans>Text size</Trans>
+        </h3>
+        <TextSizePicker
+          value={textSize}
+          onChange={(next) => {
+            const applied = setUiTextSize(next);
+            setTextSize(applied);
           }}
         />
       </section>
@@ -418,6 +440,68 @@ function AppearancePicker({
         </Toggle>
       ))}
     </fieldset>
+  );
+}
+
+function TextSizePicker({
+  value,
+  onChange,
+}: {
+  value: UiTextSize;
+  onChange: (next: UiTextSize) => void;
+}) {
+  const { t } = useLingui();
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  useEffect(() => {
+    function onTextSize(event: Event) {
+      const next = (event as CustomEvent<number>).detail;
+      if (Number.isFinite(next)) onChange(next);
+    }
+    window.addEventListener(UI_TEXT_SIZE_EVENT, onTextSize);
+    return () => window.removeEventListener(UI_TEXT_SIZE_EVENT, onTextSize);
+  }, [onChange]);
+
+  function commit(next: string) {
+    const parsed = Number(next);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const applied = Math.min(UI_TEXT_SIZE_MAX, Math.max(UI_TEXT_SIZE_MIN, Math.round(parsed)));
+    setDraft(String(applied));
+    onChange(applied);
+  }
+
+  return (
+    <div
+      data-testid="ui-text-size-select"
+      className="mt-3 flex items-center gap-2"
+    >
+      <Input
+        aria-label={t`Text size percentage`}
+        data-testid="ui-text-size-input"
+        type="number"
+        min={UI_TEXT_SIZE_MIN}
+        max={UI_TEXT_SIZE_MAX}
+        step={1}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(draft);
+          }
+        }}
+        className="w-24"
+      />
+      <span className="text-[13px] text-muted-foreground">%</span>
+    </div>
   );
 }
 
