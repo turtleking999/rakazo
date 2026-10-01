@@ -1,10 +1,10 @@
-/**
- * Re-export shared choreography for Reanimated worklets.
- * Source of truth: `@rakazo/core` (`avatar-motion.ts`), mirrored by web CSS.
- */
+export type { AvatarLifecycleState, WorkingAvatarFrame } from "@rakazo/core";
 export {
   WORKING_AVATAR_DURATIONS_MS,
-  type WorkingAvatarFrame,
+  avatarLifecycleDuration,
+  avatarLifecycleFrame,
+  resolveAvatarLifecycle,
   workingAvatarDuration,
   workingAvatarFrame,
 } from "@rakazo/core";
+

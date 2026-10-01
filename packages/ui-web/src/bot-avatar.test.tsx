@@ -41,6 +41,25 @@ describe("BotAvatar", () => {
     expect(html).toContain('data-working="false"');
   });
 
+  it("renders data-lifecycle attribute matching run status", () => {
+    expect(renderToString(<BotAvatar color="#3B82F6" status="idle" />)).toContain('data-lifecycle="idle"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="queued" />)).toContain('data-lifecycle="thinking"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="leased" />)).toContain('data-lifecycle="thinking"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="running" />)).toContain('data-lifecycle="working"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="waiting_input" />)).toContain('data-lifecycle="blocked"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="waiting_takeover" />)).toContain('data-lifecycle="blocked"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="failed" />)).toContain('data-lifecycle="error"');
+    expect(renderToString(<BotAvatar color="#3B82F6" status="completed" />)).toContain('data-lifecycle="idle"');
+    expect(renderToString(<BotAvatar color="#3B82F6" lifecycle="done" />)).toContain('data-lifecycle="done"');
+  });
+
+  it("allows explicit lifecycle override prop", () => {
+    const html = renderToString(<BotAvatar color="#3B82F6" lifecycle="thinking" />);
+    expect(html).toContain('data-lifecycle="thinking"');
+  });
+
+
+
   it("renders a geometric mascot for plain color values", () => {
     const html = renderToString(
       <BotAvatar color={DEFAULT_GROK_BOT_COLOR} identity="maya" size={28} status="running" />,

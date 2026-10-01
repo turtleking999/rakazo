@@ -1,4 +1,4 @@
-import type { GrokColorDef } from "@rakazo/core";
+import type { AvatarLifecycleState, GrokColorDef } from "@rakazo/core";
 import {
   ACTIVE_RUN_STATUSES,
   avatarIdentitySeed,
@@ -6,6 +6,7 @@ import {
   GROK_BOT_COLORS,
   GROK_COLOR_LIST,
   organicAvatarPath,
+  resolveAvatarLifecycle,
   resolvePersonaColorDef,
   SHIPPED_BOT_AVATAR_CENTER,
   SHIPPED_BOT_AVATAR_SHAPE_KEYS,
@@ -14,9 +15,10 @@ import {
   shippedBotAvatarShapePath,
   shippedHash,
 } from "@rakazo/core";
+
 import { tokens } from "@rakazo/ui-tokens";
 import type { CSSProperties } from "react";
-import { memo, useId, useMemo, useSyncExternalStore } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AvatarStyle } from "./avatar-style.js";
 import { useAvatarStyle } from "./avatar-style.js";
 import { cn } from "./lib/utils.js";
@@ -82,6 +84,7 @@ export interface BotAvatarProps {
   color: string;
   size?: number;
   status?: string;
+  lifecycle?: AvatarLifecycleState;
   identity?: string;
   className?: string;
   variant?: AvatarStyle;
@@ -91,13 +94,49 @@ export const BotAvatar = memo(function BotAvatar({
   color,
   size = 36,
   status,
+  lifecycle: lifecycleProp,
   identity = "",
   className,
   variant,
 }: BotAvatarProps) {
   const id = useId().replace(/[^a-zA-Z0-9-_]/g, "");
-  const isWorking = ACTIVE_RUN_STATUSES.some((s) => s === status);
+  const [transientDone, setTransientDone] = useState(false);
+  const prevStatusRef = useRef<string | undefined>(status);
+  const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (doneTimerRef.current) {
+      clearTimeout(doneTimerRef.current);
+      doneTimerRef.current = null;
+    }
+
+    // Trigger transient celebration only when transitioning into "completed" from an active status
+    if (status === "completed" && prev && prev !== "completed" && prev !== "idle") {
+      setTransientDone(true);
+      doneTimerRef.current = setTimeout(() => {
+        setTransientDone(false);
+      }, 1400);
+      return () => {
+        if (doneTimerRef.current) {
+          clearTimeout(doneTimerRef.current);
+          doneTimerRef.current = null;
+        }
+      };
+    }
+
+    setTransientDone(false);
+  }, [status]);
+
+  const rawLifecycle = resolveAvatarLifecycle(status);
+  const effectiveLifecycle: AvatarLifecycleState =
+    rawLifecycle === "done" && !transientDone ? "idle" : rawLifecycle;
+  const lifecycle = lifecycleProp ?? (transientDone ? "done" : effectiveLifecycle);
+  const isWorking = ACTIVE_RUN_STATUSES.some((s) => s === status) || lifecycle === "working";
   const preferredVariant = useAvatarStyle();
+
 
   const parsed = useMemo(() => parseBotAvatar(color, identity), [color, identity]);
   const effectiveId = identity || parsed.color || "agent";
@@ -122,6 +161,7 @@ export const BotAvatar = memo(function BotAvatar({
           className,
         )}
         data-working={isWorking}
+        data-lifecycle={lifecycle}
         style={{
           width: size,
           height: size,
@@ -165,6 +205,7 @@ export const BotAvatar = memo(function BotAvatar({
         identity={effectiveId}
         size={size}
         isWorking={isWorking}
+        lifecycle={lifecycle}
         className={className}
       />
     );
@@ -181,8 +222,10 @@ export const BotAvatar = memo(function BotAvatar({
         height: size,
       }}
       data-working={isWorking}
+      data-lifecycle={lifecycle}
     >
       <svg
+
         className="rakazo-bot-avatar-ring absolute pointer-events-none"
         style={{
           inset: -4,
@@ -252,12 +295,14 @@ function OrganicAvatar({
   identity,
   size,
   isWorking,
+  lifecycle,
   className,
 }: {
   color: string;
   identity?: string;
   size: number;
   isWorking: boolean;
+  lifecycle: AvatarLifecycleState;
   className?: string;
 }) {
   const reducedMotion = useSyncExternalStore(
@@ -276,6 +321,7 @@ function OrganicAvatar({
       aria-hidden="true"
       className={cn("rakazo-organic-avatar overflow-visible select-none", className)}
       data-working={isWorking}
+      data-lifecycle={lifecycle}
       data-shape-family={seed % 10}
       data-eye-pattern={seed % 4}
       style={{
@@ -284,6 +330,7 @@ function OrganicAvatar({
         flex: "none",
       }}
     >
+
       {(["idle", "working"] as const).map((mode) => (
         <path
           key={mode}
