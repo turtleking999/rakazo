@@ -13,7 +13,11 @@ function clampUiTextSize(value: number): UiTextSize {
 
 function getStorage(): Pick<Storage, "getItem" | "setItem"> | null {
   try {
-    return typeof localStorage === "undefined" ? null : localStorage;
+    if (typeof localStorage === "undefined") return null;
+    if (typeof localStorage.getItem !== "function" || typeof localStorage.setItem !== "function") {
+      return null;
+    }
+    return localStorage;
   } catch {
     return null;
   }
