@@ -6,7 +6,7 @@ import {
   SHIPPED_BOT_AVATAR_CENTER,
   SHIPPED_BOT_AVATAR_VIEWBOX,
 } from "@rakazo/core";
-import { memo, useEffect } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Image, View } from "react-native";
 import Animated, {
   cancelAnimation,
@@ -19,8 +19,16 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import Svg, { Ellipse, G, Path, Rect } from "react-native-svg";
-import { workingAvatarDuration, workingAvatarFrame } from "../lib/avatar-motion";
+import type { AvatarLifecycleState } from "../lib/avatar-motion";
+import {
+  avatarLifecycleDuration,
+  avatarLifecycleFrame,
+  resolveAvatarLifecycle,
+  workingAvatarDuration,
+  workingAvatarFrame,
+} from "../lib/avatar-motion";
 import { mobileBotAvatarPresentation } from "../lib/bot-avatar";
+
 import { useI18n } from "../lib/i18n";
 import { useAvatarStyle } from "./avatar-style";
 import { NativeSymbol } from "./native-symbol";
@@ -31,6 +39,7 @@ export const BotAvatar = memo(function BotAvatar({
   color,
   size = 54,
   status,
+  lifecycle: lifecycleProp,
   identity,
   variant,
   muted = false,
@@ -38,14 +47,49 @@ export const BotAvatar = memo(function BotAvatar({
   color: string;
   size?: number;
   status?: string;
+  lifecycle?: AvatarLifecycleState;
   identity?: string;
   variant?: AvatarStyle;
   muted?: boolean;
 }) {
   const { t } = useI18n();
-  const isWorking = ACTIVE_RUN_STATUSES.some((activeStatus) => activeStatus === status);
+  const [transientDone, setTransientDone] = useState(false);
+  const prevStatusRef = useRef<string | undefined>(status);
+  const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (doneTimerRef.current) {
+      clearTimeout(doneTimerRef.current);
+      doneTimerRef.current = null;
+    }
+
+    if (status === "completed" && prev && prev !== "completed" && prev !== "idle") {
+      setTransientDone(true);
+      doneTimerRef.current = setTimeout(() => {
+        setTransientDone(false);
+      }, 1400);
+      return () => {
+        if (doneTimerRef.current) {
+          clearTimeout(doneTimerRef.current);
+          doneTimerRef.current = null;
+        }
+      };
+    }
+    setTransientDone(false);
+  }, [status]);
+
+  const rawLifecycle = resolveAvatarLifecycle(status);
+  const effectiveLifecycle: AvatarLifecycleState =
+    rawLifecycle === "done" && !transientDone ? "idle" : rawLifecycle;
+  const lifecycle = lifecycleProp ?? (transientDone ? "done" : effectiveLifecycle);
+  const isWorking =
+    ACTIVE_RUN_STATUSES.some((activeStatus) => activeStatus === status) || lifecycle === "working";
   const { avatarStyle } = useAvatarStyle();
   const parsed = mobileBotAvatarPresentation(color);
+
   const fillColor = parsed.kind === "shape" || parsed.kind === "color" ? parsed.color : color;
   const visorW = Math.round(size * 0.68);
   const visorH = Math.round(size * 0.44);
@@ -70,9 +114,15 @@ export const BotAvatar = memo(function BotAvatar({
         eyeColor={parsed.eyeColor}
         shapePath={parsed.shapePath}
         size={size}
+        lifecycle={lifecycle}
       />
     ) : (variant ?? avatarStyle) === "organic" ? (
-      <OrganicAvatar color={fillColor} identity={identity} size={size} isWorking={isWorking} />
+      <OrganicAvatar
+        color={fillColor}
+        identity={identity}
+        size={size}
+        lifecycle={lifecycle}
+      />
     ) : (
       <View
         style={{
@@ -84,6 +134,7 @@ export const BotAvatar = memo(function BotAvatar({
           justifyContent: "center",
         }}
       >
+
         <View
           style={{
             width: visorW,
@@ -163,21 +214,41 @@ function ShippedShapeAvatar({
   eyeColor,
   shapePath,
   size,
+  lifecycle = "idle",
 }: {
   color: string;
   eyeColor: string;
   shapePath: string;
   size: number;
+  lifecycle?: AvatarLifecycleState;
 }) {
   const center = SHIPPED_BOT_AVATAR_CENTER;
+  const isThinking = lifecycle === "thinking";
+  const isBlocked = lifecycle === "blocked";
+  const isError = lifecycle === "error";
+  const eyeShiftY = isThinking ? -3.5 : isError ? 2 : 0;
+  const eyeShiftX = isThinking ? 2.5 : 0;
+  const eyeScale = isBlocked ? 1.08 : isError ? 0.96 : 1;
+
+  const containerStyle = isBlocked
+    ? { transform: [{ rotate: "4deg" }] }
+    : isError
+      ? { transform: [{ translateY: 1.5 }, { scale: 0.98 }] }
+      : undefined;
+
   return (
-    <Svg width={size} height={size} viewBox={SHIPPED_BOT_AVATAR_VIEWBOX}>
-      <Path d={shapePath} fill={color} />
-      <G fill={eyeColor}>
-        <Ellipse cx={center - 29} cy={center - 8} rx={10} ry={7} />
-        <Ellipse cx={center + 29} cy={center - 8} rx={10} ry={7} />
-      </G>
-    </Svg>
+    <View style={containerStyle}>
+      <Svg width={size} height={size} viewBox={SHIPPED_BOT_AVATAR_VIEWBOX}>
+        <Path d={shapePath} fill={color} />
+        <G
+          fill={eyeColor}
+          transform={`translate(${eyeShiftX}, ${eyeShiftY}) scale(${eyeScale})`}
+        >
+          <Ellipse cx={center - 29} cy={center - 8} rx={10} ry={7} />
+          <Ellipse cx={center + 29} cy={center - 8} rx={10} ry={7} />
+        </G>
+      </Svg>
+    </View>
   );
 }
 
@@ -185,34 +256,41 @@ function OrganicAvatar({
   color,
   identity,
   size,
-  isWorking,
+  lifecycle,
 }: {
   color: string;
   identity?: string;
   size: number;
-  isWorking: boolean;
+  lifecycle: AvatarLifecycleState;
 }) {
   const seed = avatarIdentitySeed(identity || color || "#8B5CF6");
   const progress = useSharedValue(0);
   const reducedMotion = useReducedMotion();
+  const isActive = lifecycle !== "idle";
 
   useEffect(() => {
     cancelAnimation(progress);
     progress.value = 0;
-    if (isWorking && !reducedMotion) {
+    if (lifecycle === "done" && !reducedMotion) {
+      progress.value = withTiming(1, {
+        duration: 1200,
+        easing: Easing.bezier(0.2, 0.8, 0.2, 1),
+      });
+    } else if (isActive && !reducedMotion) {
       progress.value = withRepeat(
         withTiming(1, {
-          duration: workingAvatarDuration(seed),
+          duration: avatarLifecycleDuration(seed, lifecycle),
           easing: Easing.linear,
         }),
         -1,
       );
     }
     return () => cancelAnimation(progress);
-  }, [isWorking, progress, reducedMotion, seed]);
+  }, [isActive, lifecycle, progress, reducedMotion, seed]);
+
 
   const bodyStyle = useAnimatedStyle(() => {
-    const frame = workingAvatarFrame(seed, progress.value);
+    const frame = avatarLifecycleFrame(seed, lifecycle, progress.value);
     return {
       transform: [
         { translateX: (frame.translationX * size) / 120 },
@@ -224,11 +302,11 @@ function OrganicAvatar({
     };
   });
   const leftEyeProps = useAnimatedProps(() => {
-    const frame = workingAvatarFrame(seed, progress.value);
+    const frame = avatarLifecycleFrame(seed, lifecycle, progress.value);
     return { x: -14 + frame.eyeOffsetX, y: -12 + frame.eyeOffsetY };
   });
   const rightEyeProps = useAnimatedProps(() => {
-    const frame = workingAvatarFrame(seed, progress.value);
+    const frame = avatarLifecycleFrame(seed, lifecycle, progress.value);
     return { x: 7 + frame.eyeOffsetX, y: -12 + frame.eyeOffsetY };
   });
 
@@ -258,3 +336,4 @@ function OrganicAvatar({
     </View>
   );
 }
+
