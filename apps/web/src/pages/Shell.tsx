@@ -180,6 +180,7 @@ import {
   loadComputerScreen,
   screenIframeSandbox,
 } from "../lib/computer-screen";
+import { resolveBotEffectiveStatus } from "../lib/bot-lifecycle";
 import { publishComputerCommand } from "../lib/computer-workspace";
 import { desktopBridge } from "../lib/desktop";
 import { scheduleFocusPrompt } from "../lib/focus-prompt";
@@ -418,6 +419,23 @@ export function ShellPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
   const snapshotRef = useRef<ThreadSnapshot | null>(null);
+  const [completedBots, setCompletedBots] = useState<Record<string, number>>({});
+  const markBotCompleted = useCallback((completedBotId: string) => {
+    setCompletedBots((prev) => ({
+      ...prev,
+      [completedBotId]: Date.now() + 1400,
+    }));
+    setTimeout(() => {
+      setCompletedBots((prev) => {
+        if (!prev[completedBotId] || prev[completedBotId] <= Date.now()) {
+          const next = { ...prev };
+          delete next[completedBotId];
+          return next;
+        }
+        return prev;
+      });
+    }, 1500);
+  }, []);
   const streamResponses = useSyncExternalStore(
     subscribeResponseStreaming,
     getResponseStreamingEnabled,
@@ -729,6 +747,17 @@ export function ShellPage() {
   const activeRoutines = !inGroup && routinesBotId === active?.id ? routines : [];
   const activeTaughtSkills = taughtSkillsBotId === active?.id ? taughtSkills : [];
   const recordingSkill = activeTaughtSkills.find((skill) => skill.status === "recording") ?? null;
+  const resolveBotStatus = useCallback(
+    (targetBotId: string, baseStatus?: string) =>
+      resolveBotEffectiveStatus({
+        botId: targetBotId,
+        baseStatus,
+        activeSnapshot: snapshot,
+        inGroup,
+        completedBots,
+      }),
+    [snapshot, inGroup, completedBots],
+  );
   const routeBotId = useRef<string | undefined>(botId);
   routeBotId.current = botId;
   const routeGroupId = useRef<string | undefined>(groupId);
@@ -1314,6 +1343,10 @@ export function ShellPage() {
           pinnedAroundRef.current = null;
           historyEpoch.current += 1;
         }
+        if (event.type === "run.completed") {
+          const targetBotId = event.botId ?? (!inGroup ? active?.id : undefined);
+          if (targetBotId) markBotCompleted(targetBotId);
+        }
         if (event.type === "bot.archived") {
           void refreshBots(true).catch(() => undefined);
         } else if (
@@ -1322,6 +1355,7 @@ export function ShellPage() {
           event.type === "bot.updated" ||
           event.type === "run.started" ||
           isRunTerminalEvent(event) ||
+          event.type === "run.waiting_input" ||
           event.type === "thread.cleared"
         ) {
           void refreshBots().catch(() => undefined);
@@ -1340,6 +1374,7 @@ export function ShellPage() {
         ) {
           // waiting_input: reconcile ask cards if a stale post-send refresh raced SSE.
           void refreshThread(active.id).catch(() => undefined);
+          void refreshBots().catch(() => undefined);
         } else if (isComputerStatusEvent(event)) {
           void refreshComputerScreen(active.id).catch(() => undefined);
         }
@@ -1423,9 +1458,13 @@ export function ShellPage() {
           readVisibleGroups.current.delete(groupId);
           markVisibleGroupRead();
         }
+        if (event.type === "run.completed" && event.botId) {
+          markBotCompleted(event.botId);
+        }
         if (
           event.type === "run.started" ||
           event.type === "bot.updated" ||
+          event.type === "run.waiting_input" ||
           isRunTerminalEvent(event)
         ) {
           void refreshBots().catch(() => undefined);
@@ -1756,10 +1795,21 @@ export function ShellPage() {
   }, []);
   const currentRuns = activeThreadRuns(activeSnapshot);
   const answerableAskMessageId = latestAnswerableAskMessageId(activeSnapshot);
+  const transcriptMembers = activeSnapshot?.members ?? activeGroup?.members;
   const workingRuns = currentRuns.filter((run) =>
     ["running", "queued", "leased"].includes(run.status),
   );
-  const transcriptRunning = workingRuns.length > 0;
+  const activeCompletedBotIds = useMemo(() => {
+    const now = Date.now();
+    return Object.entries(completedBots)
+      .filter(([botId, expiry]) => {
+        if (expiry <= now) return false;
+        if (!inGroup) return botId === active?.id;
+        return (transcriptMembers ?? []).some((m) => m.botId === botId);
+      })
+      .map(([botId]) => botId);
+  }, [completedBots, inGroup, active?.id, transcriptMembers]);
+  const transcriptRunning = workingRuns.length > 0 || activeCompletedBotIds.length > 0;
   const composerRunning = currentRuns.some((run) => isActive(run.status));
   const runError = threadRunError(activeSnapshot, dismissedRunErrorIds);
   const displayedRunError = !sendError ? runError : null;
@@ -1775,7 +1825,6 @@ export function ShellPage() {
     () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
     [active?.id, groupId, inGroup],
   );
-  const transcriptMembers = activeSnapshot?.members ?? activeGroup?.members;
   const resolveTranscriptBot = useCallback(
     (botId: string) => {
       const bot = bots.find((candidate) => candidate.id === botId);
@@ -1784,15 +1833,28 @@ export function ShellPage() {
     },
     [bots, transcriptMembers],
   );
-  const workingBots: GroupAvatarMember[] = workingRuns.map((run) => {
-    const bot = resolveTranscriptBot(run.botId);
-    return {
-      botId: run.botId,
-      color: bot?.color ?? FALLBACK_BOT_COLOR,
-      name: bot?.name,
-      status: run.status,
-    };
-  });
+  const workingBots: GroupAvatarMember[] = useMemo(() => {
+    if (workingRuns.length > 0) {
+      return workingRuns.map((run) => {
+        const bot = resolveTranscriptBot(run.botId);
+        return {
+          botId: run.botId,
+          color: bot?.color ?? FALLBACK_BOT_COLOR,
+          name: bot?.name,
+          status: run.status,
+        };
+      });
+    }
+    return activeCompletedBotIds.map((botId) => {
+      const bot = resolveTranscriptBot(botId);
+      return {
+        botId,
+        color: bot?.color ?? FALLBACK_BOT_COLOR,
+        name: bot?.name,
+        status: "completed",
+      };
+    });
+  }, [workingRuns, activeCompletedBotIds, resolveTranscriptBot]);
   const resolveTranscriptMemberName = useCallback(
     (botId: string | undefined) => memberName(transcriptMembers, botId),
     [transcriptMembers],
@@ -3092,7 +3154,7 @@ export function ShellPage() {
                                   color={item.chat.color}
                                   identity={item.chat.id}
                                   size={38}
-                                  status={item.chat.status}
+                                  status={resolveBotStatus(item.chat.id, item.chat.status)}
                                 />
                               ) : (
                                 <GroupAvatar
@@ -3186,7 +3248,7 @@ export function ShellPage() {
                         color={bot.color}
                         identity={bot.id}
                         size={28}
-                        status={bot.status}
+                        status={resolveBotStatus(bot.id, bot.status)}
                       />
                       <span
                         className="min-w-0 flex-1 truncate text-[14px] text-foreground/75"
@@ -3427,7 +3489,7 @@ export function ShellPage() {
                   color={active.color}
                   identity={active.id}
                   size={26}
-                  status={active.status}
+                  status={resolveBotStatus(active.id, active.status)}
                 />
               ) : null}
               <span className="min-w-0">
@@ -3506,6 +3568,7 @@ export function ShellPage() {
             speakingMessageId={speakingMessageId}
             onSpeak={speakMessage}
             onOpenComputer={onOpenComputer}
+            resolveBotStatus={resolveBotStatus}
           />
         )}
         {recordingSkill ? (
@@ -4388,7 +4451,7 @@ export function ShellPage() {
                   color={computerBot.color}
                   identity={computerBot.id}
                   size={28}
-                  status={computerBot.status}
+                  status={resolveBotStatus(computerBot.id, computerBot.status)}
                 />
                 {recordingSkill ? (
                   <TeachRecordingChrome
@@ -4562,6 +4625,7 @@ const Transcript = memo(function Transcript({
   speakingMessageId,
   onSpeak,
   onOpenComputer,
+  resolveBotStatus,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   scrollRequest: { messageId: string; nonce: number } | null;
@@ -4591,6 +4655,7 @@ const Transcript = memo(function Transcript({
   speakingMessageId: string | null;
   onSpeak: (message: ThreadMessage) => void;
   onOpenComputer: (botId?: string) => void;
+  resolveBotStatus?: (targetBotId: string, baseStatus?: string) => string;
 }) {
   const { t } = useLingui();
   const [atEnd, setAtEnd] = useState(true);
@@ -4605,10 +4670,16 @@ const Transcript = memo(function Transcript({
   );
   const reactionView = useMemo(() => projectMessageReactions(messages), [messages]);
   const workingBotName = workingBots.length === 1 ? workingBots[0]?.name : undefined;
+  const isAllCompleted =
+    workingBots.length > 0 && workingBots.every((b) => b.status === "completed");
   const workingLabel =
     workingBotName != null && workingBotName !== ""
-      ? t`${workingBotName} is working`
-      : t`Bots are working`;
+      ? isAllCompleted
+        ? t`${workingBotName} finished`
+        : t`${workingBotName} is working`
+      : isAllCompleted
+        ? t`Finished`
+        : t`Bots are working`;
   const [quoteDraft, setQuoteDraft] = useState<{
     message: ThreadMessage;
     text: string;
@@ -4933,6 +5004,7 @@ const Transcript = memo(function Transcript({
                     onSpeak={() => onSpeak(message)}
                     onOpenComputer={onOpenComputer}
                     showToolActivity={showToolActivity}
+                    resolveBotStatus={resolveBotStatus}
                   />
                   {peerReceipt ? null : (
                     <MessageHoverActions
@@ -6083,6 +6155,7 @@ const MessageView = memo(function MessageView({
   onSpeak,
   onOpenComputer,
   showToolActivity,
+  resolveBotStatus,
 }: {
   artifactTarget: ArtifactTarget;
   canAnswer: boolean;
@@ -6104,6 +6177,7 @@ const MessageView = memo(function MessageView({
   onSpeak: () => void;
   onOpenComputer: (botId?: string) => void;
   showToolActivity: boolean;
+  resolveBotStatus?: (targetBotId: string, baseStatus?: string) => string;
 }) {
   const { t } = useLingui();
   const isNarration =
@@ -6133,6 +6207,7 @@ const MessageView = memo(function MessageView({
             color={speakerBot?.color ?? FALLBACK_BOT_COLOR}
             identity={message.botId}
             size={22}
+            status={resolveBotStatus?.(message.botId ?? "", speakerBot?.status) ?? speakerBot?.status}
           />
           {speakerName}
         </div>

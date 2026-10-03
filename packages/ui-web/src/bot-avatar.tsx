@@ -115,9 +115,13 @@ export const BotAvatar = memo(function BotAvatar({
 
     // Trigger transient celebration only when transitioning into "completed" from an active status
     if (status === "completed" && prev && prev !== "completed" && prev !== "idle") {
+      if (doneTimerRef.current) {
+        clearTimeout(doneTimerRef.current);
+      }
       setTransientDone(true);
       doneTimerRef.current = setTimeout(() => {
         setTransientDone(false);
+        doneTimerRef.current = null;
       }, 1400);
       return () => {
         if (doneTimerRef.current) {
@@ -127,7 +131,17 @@ export const BotAvatar = memo(function BotAvatar({
       };
     }
 
-    setTransientDone(false);
+    if (status !== "completed") {
+      if (ACTIVE_RUN_STATUSES.some((s) => s === status)) {
+        if (doneTimerRef.current) {
+          clearTimeout(doneTimerRef.current);
+          doneTimerRef.current = null;
+        }
+        setTransientDone(false);
+      } else if (!doneTimerRef.current) {
+        setTransientDone(false);
+      }
+    }
   }, [status]);
 
   const rawLifecycle = resolveAvatarLifecycle(status);
