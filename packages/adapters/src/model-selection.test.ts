@@ -880,6 +880,12 @@ describe("connected model validation", () => {
       validateConnectedModelChoice(catalogPrisma, actor, "xai", "grok-4.6"),
     ).resolves.toBeUndefined();
     await expect(
+      validateConnectedModelChoice(catalogPrisma, actor, "xai", "grok-4.7-build-fast"),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateConnectedModelChoice(catalogPrisma, actor, "xai", "grok-4.7-fast"),
+    ).resolves.toBeUndefined();
+    await expect(
       validateConnectedModelChoice(catalogPrisma, actor, "xai", "not-a-model"),
     ).resolves.toBe("Unknown model for that provider");
 

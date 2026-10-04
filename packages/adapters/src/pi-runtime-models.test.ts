@@ -20,6 +20,7 @@ describe("request model catalogs", () => {
     ["openai-codex", "gpt-6-sol"],
     ["anthropic", "claude-fable-5-1"],
     ["anthropic", "claude-opus-5-5"],
+    ["xai", "grok-4.7-build-fast"],
   ])("offers and resolves %s/%s with vision", (provider, id) => {
     const entry = listPiCatalog().find((model) => model.provider === provider && model.id === id);
     expect(entry).toBeDefined();
@@ -122,5 +123,12 @@ describe("resolveRuntimeModel", () => {
     expect(resolved.modelId).toBe("");
     expect(resolved.model).toBeUndefined();
     expect(resolved.provider).toBe("anthropic");
+  });
+
+  it("resolves grok-4.7-fast alias to grok-4.7-build-fast", () => {
+    const resolved = resolveRuntimeModel({ provider: "xai", id: "grok-4.7-fast" });
+    expect(resolved.modelId).toBe("grok-4.7-build-fast");
+    expect(resolved.model).toBeDefined();
+    expect(resolved.model?.name).toBe("Grok 4.7 Fast");
   });
 });

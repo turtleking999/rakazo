@@ -48,6 +48,7 @@ import {
   registerOpenAiCompatibleCatalog,
   registerOpenAiCompatibleRuntime,
 } from "./pi-openai-compatible-provider.js";
+import { normalizeXaiModelId, registerXaiFastModels } from "./pi-xai-provider.js";
 import {
   billedPromptTokens,
   clipToolResultContent,
@@ -82,7 +83,7 @@ const toolCallBudgetsByRun = new Map<string, ToolCallBudget>();
 let catalogModelsCache: Models | undefined;
 function catalogModels(): Models {
   catalogModelsCache ??= registerOpenAiCompatibleCatalog(
-    registerLocalProvider(supplementPiModels(builtinModels())),
+    registerLocalProvider(registerXaiFastModels(supplementPiModels(builtinModels()))),
   );
   return catalogModelsCache;
 }
@@ -556,7 +557,8 @@ export function resolveRuntimeModel(modelConfig: AgentRunRequest["model"]): {
   const envDefaultProvider = process.env.PI_DEFAULT_PROVIDER?.trim() || "openrouter";
   const requestedId =
     modelConfig.id === "scripted" ? envDefaultModel || DEFAULT_OPENROUTER_MODEL_ID : modelConfig.id;
-  const modelId = usableModelId(requestedId) ?? "";
+  const rawId = usableModelId(requestedId) ?? "";
+  const modelId = provider === "xai" ? normalizeXaiModelId(rawId) : rawId;
   const credentials = credentialStoreForRequest({ model: modelConfig }, provider);
   const models = modelsForRequest({ model: modelConfig }, provider, credentials);
   let model = models.getModel(provider, modelId);
@@ -605,7 +607,9 @@ export function modelsForRequest(
   const store = credentials ?? credentialStoreForRequest(request, provider);
   if (store) {
     return registerOpenAiCompatibleCatalog(
-      registerLocalProvider(supplementPiModels(builtinModels({ credentials: store }))),
+      registerLocalProvider(
+        registerXaiFastModels(supplementPiModels(builtinModels({ credentials: store }))),
+      ),
     );
   }
   if (
@@ -614,7 +618,7 @@ export function modelsForRequest(
     request.model.id.trim()
   ) {
     const models = registerOpenAiCompatibleCatalog(
-      registerLocalProvider(supplementPiModels(builtinModels())),
+      registerLocalProvider(registerXaiFastModels(supplementPiModels(builtinModels()))),
     );
     return registerOpenAiCompatibleRuntime(models, {
       modelId: request.model.id,

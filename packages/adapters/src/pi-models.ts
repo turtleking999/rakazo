@@ -8,6 +8,7 @@ import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   registerOpenAiCompatibleCatalog,
 } from "./pi-openai-compatible-provider.js";
+import { registerXaiFastModels } from "./pi-xai-provider.js";
 
 export type PiCatalogAuth = "api-key" | "oauth" | "both";
 
@@ -36,7 +37,7 @@ let cachedCatalog: PiCatalogEntry[] | undefined;
 
 function buildPiCatalog(): PiCatalogEntry[] {
   const models = registerOpenAiCompatibleCatalog(
-    registerLocalProvider(supplementPiModels(builtinModels())),
+    registerLocalProvider(registerXaiFastModels(supplementPiModels(builtinModels()))),
   );
   const entries: PiCatalogEntry[] = [];
   for (const provider of models.getProviders()) {

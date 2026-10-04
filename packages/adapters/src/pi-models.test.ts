@@ -46,9 +46,18 @@ describe("Pi model catalog", () => {
     const ids = (provider: string) =>
       catalog.filter((entry) => entry.provider === provider).map((entry) => entry.id);
     expect(ids("xai")).toContain("grok-4.6");
+    expect(ids("xai")).toContain("grok-4.7-build-fast");
     expect(ids("opencode-go")).toContain("glm-5.3");
     const grok46 = catalog.find((entry) => entry.provider === "xai" && entry.id === "grok-4.6");
     expect(grok46).toMatchObject({
+      reasoning: true,
+      thinkingLevels: ["low", "medium", "high", "xhigh"],
+    });
+    const grok47Fast = catalog.find(
+      (entry) => entry.provider === "xai" && entry.id === "grok-4.7-build-fast",
+    );
+    expect(grok47Fast).toMatchObject({
+      label: "Grok 4.7 Fast",
       reasoning: true,
       thinkingLevels: ["low", "medium", "high", "xhigh"],
     });

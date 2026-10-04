@@ -19,13 +19,15 @@ import { codexLiveListsModel } from "./pi-codex-catalog.js";
 import { listPiCatalog, scriptedCatalogEntry } from "./pi-models.js";
 import { parseModelSecret } from "./pi-oauth.js";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./pi-openai-compatible-provider.js";
+import { normalizeXaiModelId } from "./pi-xai-provider.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 type ModelCredential = Awaited<ReturnType<typeof findDefaultModelCredential>>;
 
 export function isCatalogModelChoice(provider: string, modelId: string) {
+  const normalizedId = provider === "xai" ? normalizeXaiModelId(modelId) : modelId;
   return [...listPiCatalog(), scriptedCatalogEntry].some(
-    (item) => item.provider === provider && item.id === modelId,
+    (item) => item.provider === provider && item.id === normalizedId,
   );
 }
 
@@ -91,7 +93,6 @@ export async function modelCredentialAuthKindsForSpace(
       select: {
         id: true,
         modelId: true,
-        thinkingLevel: true,
         isDefault: true,
         updatedAt: true,
         credential: {
@@ -116,12 +117,19 @@ export async function modelCredentialAuthKindsForSpace(
     secretId: string;
     modelSpecific: boolean;
   }> = [];
+  const modelPreferences = preferences.map((preference) => ({
+    ...preference,
+    thinkingLevel:
+      ("thinkingLevel" in preference
+        ? (preference as { thinkingLevel?: string | null }).thinkingLevel
+        : null) ?? null,
+  }));
   for (const entry of listPiCatalog()) {
     if (!connectedProviders.has(entry.provider)) continue;
     const choice = chooseModelCredential({
       provider: entry.provider,
       modelId: entry.id,
-      preferences,
+      preferences: modelPreferences,
       credentials,
     });
     if (!choice) continue;
