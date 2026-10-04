@@ -404,6 +404,7 @@ describe("LocalStackController", () => {
       expect(call.env).toMatchObject({
         RAKAZO_IMAGE_TAG: "v1.2.3",
         RAKAZO_COMPUTER_IMAGE_TAG: "v1.2.3",
+        RAKAZO_VOLUME_NAMESPACE: "rakazo-desktop",
         COMPOSE_PROGRESS: "plain",
         HOME: "/home/me",
       });

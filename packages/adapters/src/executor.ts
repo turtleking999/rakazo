@@ -31,6 +31,7 @@ import {
   routineJobKey,
   routineWakeupJob,
   runContinueJob,
+  webhookDeliveryJob,
 } from "@rakazo/adapter-kit";
 import type { ComputerCommand, MessageBlock, RunStatus } from "@rakazo/contracts";
 import {
@@ -354,6 +355,7 @@ import {
 } from "./user-progress.js";
 import { createWebProvider } from "./web-provider-factory.js";
 import { webFetchFromTool, webSearchFromTool } from "./web-tools.js";
+import { completionWebhookPayload, configuredCompletionWebhook } from "./webhook-delivery.js";
 
 const READ_ONLY_AGENT_TOOLS = new Set([
   "computer_observe",
@@ -3652,6 +3654,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const runModelProvider = selected.provider ?? runtimeFallback?.provider;
         const runModelId = selected.id ?? runtimeFallback?.id;
         const failRunBeforeModel = async (message: string) => {
+          const completionWebhook = buildCompletionWebhookInput({
+            runId,
+            botId: bot.id,
+            threadId: thread.id,
+            content: "",
+            error: message,
+          });
           const failed = await deps.events.finalizeRun({
             spaceId: run.spaceId,
             threadId: thread.id,
@@ -3663,6 +3672,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             leaseFence: fence,
             outcome: "failed",
             error: message,
+            ...(completionWebhook ? { completionWebhook } : {}),
           });
           if (!failed) return;
           if (failed.continuationRunId) {
@@ -3680,6 +3690,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
             ).catch((error) => getLogger().error("bot message failure return", error));
           }
           if (!failed.continuationRunId) {
+            if (failed.completionDeliveryId) {
+              await deps.jobs
+                .enqueue(webhookDeliveryJob(failed.completionDeliveryId))
+                .catch((error) => getLogger().error("failure webhook enqueue", error));
+            }
             await notifyRun(deps, run, {
               kind: "failure",
               title: `${bot.name} failed`,
@@ -6827,6 +6842,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
           if (containsSecret(text, runSecrets)) {
             throw new Error("refusing to persist a secret in the thread");
           }
+          const completionWebhook = buildCompletionWebhookInput({
+            runId,
+            botId: bot.id,
+            threadId: thread.id,
+            content: text,
+            blocks,
+          });
           if (!(await renewRunLease(deps, runId, workerId, fence))) return;
           const botMessageOutcome =
             run.trigger === "bot_message"
@@ -6844,12 +6866,18 @@ export function createRunExecutor(deps: ExecutorDeps) {
             outcome: "completed",
             blocks,
             markUnread: completionMarksUnread(run.trigger, text),
+            ...(completionWebhook ? { completionWebhook } : {}),
           });
           if (!completed) return;
           if (completed.continuationRunId) {
             await deps.jobs
               .enqueue(runContinueJob(completed.continuationRunId))
               .catch((error) => getLogger().error("steering continuation enqueue", error));
+          }
+          if (completed.completionDeliveryId) {
+            await deps.jobs
+              .enqueue(webhookDeliveryJob(completed.completionDeliveryId))
+              .catch((error) => getLogger().error("completion webhook enqueue", error));
           }
           if (botMessageOutcome) {
             // Prefer the final reply. If the turn only posted mid-turn progress, return that
@@ -6910,6 +6938,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
             error instanceof Error ? error.message : String(error),
             runSecrets,
           );
+          const completionWebhook = buildCompletionWebhookInput({
+            runId,
+            botId: bot.id,
+            threadId: thread.id,
+            content: "",
+            error: message,
+          });
           const failed = await deps.events.finalizeRun({
             spaceId: run.spaceId,
             threadId: thread.id,
@@ -6921,6 +6956,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             leaseFence: fence,
             outcome: "failed",
             error: message,
+            ...(completionWebhook ? { completionWebhook } : {}),
           });
           if (!failed) return;
           if (failed.continuationRunId) {
@@ -6945,6 +6981,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
               botId: bot.id,
               threadId: thread.id,
             });
+          }
+          if (!failed.continuationRunId) {
+            if (failed.completionDeliveryId) {
+              await deps.jobs
+                .enqueue(webhookDeliveryJob(failed.completionDeliveryId))
+                .catch((error) => getLogger().error("failure webhook enqueue", error));
+            }
           }
         }
       } catch (setupError) {
@@ -7131,6 +7174,34 @@ async function notifyRun(
     .catch((error) => {
       getLogger().error("run notification", error);
     });
+}
+
+function buildCompletionWebhookInput(input: {
+  runId: string;
+  botId: string;
+  threadId: string;
+  content: string;
+  blocks?: MessageBlock[];
+  error?: string;
+}):
+  | {
+      endpoint: string;
+      idempotencyKey: string;
+      payload: Record<string, unknown>;
+    }
+  | undefined {
+  try {
+    const config = configuredCompletionWebhook();
+    if (!config) return undefined;
+    return {
+      endpoint: config.endpoint,
+      idempotencyKey: `completion:${input.runId}`,
+      payload: completionWebhookPayload(input) as unknown as Record<string, unknown>,
+    };
+  } catch (error) {
+    getLogger().error("completion webhook configuration", error);
+    return undefined;
+  }
 }
 
 async function renewRunLease(

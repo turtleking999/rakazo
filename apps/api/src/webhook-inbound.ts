@@ -177,7 +177,7 @@ export async function loadRoutineWebhookTarget(
     },
   });
 
-  if (!routine || !routine.webhookEnabled || routine.bot.archivedAt) return null;
+  if (!routine?.webhookEnabled || routine.bot.archivedAt) return null;
   const bot = routine.bot;
   const targetThreadId = routine.threadId ?? bot.thread?.id;
   if (!targetThreadId || !bot.webhookSecretId) return null;
@@ -267,7 +267,16 @@ export async function deliverWebhookEvent(
     threadId: target.threadId,
     botId: target.bot.id,
     userId: target.bot.userId,
-    blocks: createMessage ? [{ kind: "text", text: promptText }] : [],
+    // `createMessage=false` suppresses a visible chat bubble in the web
+    // renderer; the DB still needs the prompt as a hidden message so a busy
+    // bot can steer it later without dropping the delivery.
+    blocks: [
+      {
+        kind: "text",
+        text: promptText,
+        ...(createMessage ? {} : { visibility: "hidden" as const }),
+      },
+    ],
     prompt: promptText,
     trigger: "webhook",
     clientNonce,

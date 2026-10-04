@@ -20,6 +20,7 @@ import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
+import { deliverCompletionWebhook } from "./webhook-delivery.js";
 
 export function createBackgroundJobHandlers(deps: {
   executor: ReturnType<typeof createRunExecutor>;
@@ -69,6 +70,9 @@ export function createBackgroundJobHandlers(deps: {
     },
     "messaging.deliver": async (payload) => {
       await deliverMessaging(payload.runId);
+    },
+    "webhook.deliver": async ({ deliveryId }) => {
+      await deliverCompletionWebhook(deps.prisma, deliveryId);
     },
     "routine.wakeup": async (payload) => {
       await deps.executor.wakeRoutine(payload.routineId, payload.scheduledFor);

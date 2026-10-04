@@ -2628,6 +2628,12 @@ const MessageBubble = memo(function MessageBubble({
   const [peerExpanded, setPeerExpanded] = useState(false);
   const artifactTarget: MobileArtifactTarget = groupId ? { groupId } : { botId };
   const cardBotId = message.botId ?? botId;
+  if (
+    message.blocks.length > 0 &&
+    message.blocks.every((block) => block.kind === "text" && block.visibility === "hidden")
+  ) {
+    return null;
+  }
   const appConnectBlocks = message.blocks.filter(
     (block): block is Extract<MessageBlock, { kind: "app_connect" }> =>
       block.kind === "app_connect",

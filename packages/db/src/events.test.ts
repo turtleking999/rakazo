@@ -128,6 +128,71 @@ describe("finalizeRun", () => {
     expect(publish).toHaveBeenCalledOnce();
   });
 
+  it("writes a completion webhook outbox row in the finalization transaction", async () => {
+    const tx = {
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running" })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 1 })) },
+      message: { create: vi.fn(async () => ({ id: "message-1", seq: 1 })) },
+      event: {
+        create: vi.fn(async ({ data }: { data: { seq: number; type: string } }) => ({
+          ...event(data.seq),
+          type: data.type,
+        })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+      },
+      steeringMessage: {
+        findMany: vi.fn(async () => []),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+      },
+      webhookDelivery: {
+        upsert: vi.fn(async () => ({ id: "delivery-1" })),
+      },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      finalizeRun(prisma, {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        leaseOwner: "worker-1",
+        leaseFence: 1,
+        outcome: "completed",
+        blocks: [{ kind: "text", text: "done" }],
+        completionWebhook: {
+          endpoint: "https://receiver.example.test/hook",
+          idempotencyKey: "completion:run-1",
+          payload: { event: "run.completed", content: "done" },
+        },
+      }),
+    ).resolves.toEqual({ continuationRunId: null, completionDeliveryId: "delivery-1" });
+
+    expect(tx.webhookDelivery.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          endpoint: "https://receiver.example.test/hook",
+          idempotencyKey: "completion:run-1",
+          runId: "run-1",
+        }),
+      }),
+    );
+  });
+
   it("resumes a held messaging inbound as a messaging run", async () => {
     const tx = {
       $queryRaw: vi.fn(async () => []),
@@ -2076,7 +2141,7 @@ describe("sendUserMessage", () => {
     });
   });
 
-  it("keeps an inbound message pending while the creation intro is active", async () => {
+  it("keeps a webhook inbound pending while the creation intro is active", async () => {
     const tx = {
       thread: {
         update: vi
@@ -2117,7 +2182,8 @@ describe("sendUserMessage", () => {
         userId: "user-1",
         blocks: [{ kind: "text", text: "Check the inbox" }],
         prompt: "Check the inbox",
-        trigger: "user",
+        trigger: "webhook",
+        createMessage: false,
       }),
     ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: "intro-run" });
 

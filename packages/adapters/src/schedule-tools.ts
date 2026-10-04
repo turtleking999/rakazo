@@ -217,7 +217,11 @@ function normalizeCheck(value: unknown): string | null | { error: string } {
   return check;
 }
 
-function webhookDetails(deps: Pick<ScheduleToolDeps, "publicApiUrl">, routineId: string, secret: string) {
+function webhookDetails(
+  deps: Pick<ScheduleToolDeps, "publicApiUrl">,
+  routineId: string,
+  secret: string,
+) {
   const path = routineWebhookPath(routineId);
   const origin = deps.publicApiUrl?.trim().replace(/\/+$/, "");
   return {
@@ -256,7 +260,9 @@ export async function createScheduleFromTool(
       return { error: "A webhook routine runs on push; do not also give it a clock schedule." };
     }
     if (check) {
-      return { error: "check only applies to clock schedules; webhook routines already run only on push." };
+      return {
+        error: "check only applies to clock schedules; webhook routines already run only on push.",
+      };
     }
     return createWebhookRoutine(deps, { ...input, name, prompt });
   }

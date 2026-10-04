@@ -6,6 +6,7 @@ import {
   historyCompactJobKey,
   messagingDeliverJob,
   parseBackgroundJob,
+  webhookDeliveryJob,
 } from "./background-jobs.js";
 import type { BackgroundJobHandlers } from "./types.js";
 
@@ -19,6 +20,7 @@ function handlers(): BackgroundJobHandlers {
     "skill.teaching-expire": vi.fn(async () => undefined),
     "history.compact": vi.fn(async () => undefined),
     "messaging.deliver": vi.fn(async () => undefined),
+    "webhook.deliver": vi.fn(async () => undefined),
     "cloud_agent.poll": vi.fn(async () => undefined),
   };
 }
@@ -49,6 +51,17 @@ describe("background job contracts", () => {
     expect(target["routine.wakeup"]).toHaveBeenCalledWith({
       routineId: "routine-1",
       scheduledFor: "2026-08-15T12:00:00.000Z",
+    });
+  });
+
+  it("validates and keys webhook delivery jobs", async () => {
+    const target = handlers();
+    await dispatchBackgroundJob(target, "webhook.deliver", { deliveryId: "delivery-1" });
+    expect(target["webhook.deliver"]).toHaveBeenCalledWith({ deliveryId: "delivery-1" });
+    expect(webhookDeliveryJob("delivery-1")).toEqual({
+      name: "webhook.deliver",
+      payload: { deliveryId: "delivery-1" },
+      replaceKey: "webhook.deliver:delivery-1",
     });
   });
 

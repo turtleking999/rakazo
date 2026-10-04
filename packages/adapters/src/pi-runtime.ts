@@ -48,7 +48,6 @@ import {
   registerOpenAiCompatibleCatalog,
   registerOpenAiCompatibleRuntime,
 } from "./pi-openai-compatible-provider.js";
-import { normalizeXaiModelId, registerXaiFastModels } from "./pi-xai-provider.js";
 import {
   billedPromptTokens,
   clipToolResultContent,
@@ -64,6 +63,7 @@ import {
   type PiSessionHandle,
   type PiSessionRecorder,
 } from "./pi-session.js";
+import { normalizeXaiModelId, registerXaiFastModels } from "./pi-xai-provider.js";
 import type { FinishedShellCommand } from "./shell-command-stream.js";
 import { deliverFinishedShells } from "./shell-command-stream.js";
 import { textContentArg } from "./tool-text.js";

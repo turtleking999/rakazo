@@ -3,7 +3,6 @@ set -euo pipefail
 
 PROJECT_DIR="${RAKAZO_DEPLOY_DIR:-/srv/rakazo}"
 [[ "${PROJECT_DIR}" == /* ]] || { echo "RAKAZO_DEPLOY_DIR must be an absolute path" >&2; exit 1; }
-COMPOSE_FILE="${PROJECT_DIR}/infra/compose/docker-compose.prod.yml"
 ENV_FILE="${PROJECT_DIR}/.env"
 BACKUP_ROOT="/var/backups/rakazo"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -11,7 +10,25 @@ SNAPSHOT_DIR="${BACKUP_ROOT}/${STAMP}"
 
 install -d -m 700 "${BACKUP_ROOT}" "${SNAPSHOT_DIR}"
 
-compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
+env_value() {
+  local key="$1"
+  [[ -r "${ENV_FILE}" ]] || return 0
+  sed -n "s/^${key}=//p" "${ENV_FILE}" | tail -n 1
+}
+
+compose_file_setting="${RAKAZO_COMPOSE_FILE:-$(env_value RAKAZO_COMPOSE_FILE)}"
+compose_file_setting="${compose_file_setting:-infra/compose/docker-compose.prod.yml}"
+compose_path_separator="${COMPOSE_PATH_SEPARATOR:-$(env_value COMPOSE_PATH_SEPARATOR)}"
+compose_path_separator="${compose_path_separator:-:}"
+IFS="${compose_path_separator}" read -r -a compose_files <<<"${compose_file_setting}"
+compose=(docker compose --env-file "${ENV_FILE}")
+for compose_file in "${compose_files[@]}"; do
+  [[ -n "${compose_file}" && "${compose_file}" != /* ]] || {
+    echo "RAKAZO_COMPOSE_FILE must contain relative, non-empty paths" >&2
+    exit 1
+  }
+  compose+=(-f "${PROJECT_DIR}/${compose_file}")
+done
 
 "${compose[@]}" exec -T postgres sh -c \
   'pg_dump --format=custom --no-owner --no-privileges -U "$POSTGRES_USER" "$POSTGRES_DB"' \
@@ -54,6 +71,17 @@ tar -tzf "${SNAPSHOT_DIR}/appdata.tgz" >/dev/null
 
 sha256sum "${SNAPSHOT_DIR}/rakazo.dump" "${SNAPSHOT_DIR}/appdata.tgz" \
   > "${SNAPSHOT_DIR}/SHA256SUMS"
+cat >"${SNAPSHOT_DIR}/MANIFEST" <<EOF
+format=rakazo-production-backup-v1
+created_at=${STAMP}
+deployment_dir=${PROJECT_DIR}
+compose_files=${compose_file_setting}
+postgres_dump=rakazo.dump
+application_data=appdata.tgz
+secret_continuity=required
+secret_escrow=external-encrypted-operator-store
+restore_order=secrets,postgres,appdata,services
+EOF
 chmod 600 "${SNAPSHOT_DIR}"/*
 
 # Keep seven daily snapshots. BACKUP_ROOT is intentionally fixed above so this

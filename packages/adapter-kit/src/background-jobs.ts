@@ -21,6 +21,7 @@ const payloadSchemas = {
   "skill.teaching-expire": z.object({ skillId: z.string().min(1) }),
   "history.compact": z.object({ threadId: z.string().min(1) }),
   "messaging.deliver": z.object({ runId: z.string().min(1).optional() }),
+  "webhook.deliver": z.object({ deliveryId: z.string().min(1) }),
   "cloud_agent.poll": z.object({ agentId: z.string().min(1) }),
 } satisfies { [Name in BackgroundJobName]: z.ZodType<BackgroundJobPayloads[Name]> };
 
@@ -128,6 +129,15 @@ export function messagingDeliverJob(runId?: string, availableAt?: Date): Backgro
     name: "messaging.deliver",
     payload: runId ? { runId } : {},
     replaceKey: `messaging.deliver:${runId ?? "drain"}`,
+    ...(availableAt ? { availableAt } : {}),
+  };
+}
+
+export function webhookDeliveryJob(deliveryId: string, availableAt?: Date): BackgroundJob {
+  return {
+    name: "webhook.deliver",
+    payload: { deliveryId },
+    replaceKey: `webhook.deliver:${deliveryId}`,
     ...(availableAt ? { availableAt } : {}),
   };
 }

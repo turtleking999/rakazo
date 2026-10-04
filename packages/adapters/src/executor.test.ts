@@ -1672,12 +1672,8 @@ description: Prepare standup notes
         data: expect.objectContaining({ lastRunAt: expect.any(Date), nextRunAt: expect.any(Date) }),
       }),
     );
-    expect(enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "routine.wakeup" }),
-    );
-    expect(enqueue).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "run.continue" }),
-    );
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ name: "routine.wakeup" }));
+    expect(enqueue).not.toHaveBeenCalledWith(expect.objectContaining({ name: "run.continue" }));
   });
 
   it("claims the run and attaches untrusted output when routine check passes with content", async () => {
@@ -1741,9 +1737,7 @@ description: Prepare standup notes
       }),
     );
     expect(runCreate).toHaveBeenCalled();
-    expect(enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "run.continue" }),
-    );
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ name: "run.continue" }));
   });
 
   it("consumes a persisted takeover checkpoint when claiming the run", async () => {

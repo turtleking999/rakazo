@@ -106,6 +106,7 @@ export interface ClaimedSteeringMessage {
 
 export interface FinalizeRunResult {
   continuationRunId: string | null;
+  completionDeliveryId?: string;
 }
 
 interface FinalizeRunBase {
@@ -117,6 +118,11 @@ interface FinalizeRunBase {
   attemptId: string;
   leaseOwner: string;
   leaseFence: number;
+  completionWebhook?: {
+    endpoint: string;
+    idempotencyKey: string;
+    payload: Record<string, unknown>;
+  };
 }
 
 export type FinalizeRunInput = FinalizeRunBase &
@@ -350,22 +356,6 @@ export async function sendUserMessage(
 ): Promise<SendUserMessageResult> {
   const replay = async (): Promise<SendUserMessageResult | null> => {
     if (!input.clientNonce) return null;
-    if (input.createMessage === false) {
-      const run = await prisma.run.findFirst({
-        where: {
-          threadId: input.threadId,
-          clientNonce: input.clientNonce,
-        },
-        select: { id: true, taskId: true },
-      });
-      if (!run) return null;
-      return {
-        messageId: "",
-        seq: 0,
-        taskId: run.taskId,
-        runId: run.id,
-      };
-    }
     const message = await prisma.message.findUnique({
       where: {
         threadId_clientNonce: {
@@ -397,7 +387,10 @@ export async function sendUserMessage(
       // transaction. Created in separate transactions, the run could land inside the clear's
       // window and later repopulate the cleared conversation, and a clear could strand the
       // message without its event.
-      const shouldCreateMessage = input.createMessage !== false;
+      // Automated webhook messages are persisted with their raw inbound block,
+      // which the web renderer deliberately hides. This keeps busy deliveries
+      // addressable through steeringMessages without creating a visible bubble.
+      const shouldCreateMessage = input.createMessage !== false || input.trigger === "webhook";
       const message = shouldCreateMessage
         ? await createThreadMessageInTransaction(tx, {
             threadId: input.threadId,
@@ -449,7 +442,9 @@ export async function sendUserMessage(
             status: "queued",
             trigger: input.trigger,
             clientNonce: input.clientNonce
-              ? (message ? `send:${message.id}` : input.clientNonce)
+              ? message
+                ? `send:${message.id}`
+                : input.clientNonce
               : undefined,
             sourceMessageId: message?.id ?? null,
           },
@@ -1083,7 +1078,12 @@ export async function finalizeRun(
   const committed = await withTransactionRetry(() => finalizeRunOnce(prisma, input));
   if (!committed) return false;
   await notifyRealtime(realtime, committed.threadId, committed.seq);
-  return { continuationRunId: committed.continuationRunId };
+  return {
+    continuationRunId: committed.continuationRunId,
+    ...(committed.completionDeliveryId
+      ? { completionDeliveryId: committed.completionDeliveryId }
+      : {}),
+  };
 }
 
 /** Stamps one turn-level wall-clock duration on the final tool block. */
@@ -1107,7 +1107,12 @@ export function completedRunBlocks(
 async function finalizeRunOnce(
   prisma: PrismaClient,
   input: FinalizeRunInput,
-): Promise<{ threadId: string; seq: number; continuationRunId: string | null } | null> {
+): Promise<{
+  threadId: string;
+  seq: number;
+  continuationRunId: string | null;
+  completionDeliveryId?: string;
+} | null> {
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw`SELECT id FROM threads WHERE id = ${input.threadId} FOR UPDATE`;
     let writableRun: { startedAt: Date | null } | undefined;
@@ -1219,8 +1224,37 @@ async function finalizeRunOnce(
       });
     }
     const continuationRunId = await createPendingSteeringRun(tx, input);
+    let completionDeliveryId: string | undefined;
+    if (input.completionWebhook && !continuationRunId) {
+      const delivery = await tx.webhookDelivery.upsert({
+        where: {
+          direction_idempotencyKey: {
+            direction: "outbound",
+            idempotencyKey: input.completionWebhook.idempotencyKey,
+          },
+        },
+        create: {
+          direction: "outbound",
+          source: "run-completion",
+          idempotencyKey: input.completionWebhook.idempotencyKey,
+          endpoint: input.completionWebhook.endpoint,
+          botId: input.botId,
+          threadId: input.threadId,
+          runId: input.runId,
+          payload: input.completionWebhook.payload as Prisma.InputJsonValue,
+        },
+        update: {},
+        select: { id: true },
+      });
+      completionDeliveryId = delivery.id;
+    }
     await tx.bot.update({ where: { id: input.botId }, data: { updatedAt: now } });
-    return { threadId: lastEvent.threadId, seq: lastEvent.seq, continuationRunId };
+    return {
+      threadId: lastEvent.threadId,
+      seq: lastEvent.seq,
+      continuationRunId,
+      ...(completionDeliveryId ? { completionDeliveryId } : {}),
+    };
   });
 }
 

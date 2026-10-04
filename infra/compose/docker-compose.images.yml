@@ -240,8 +240,16 @@ services:
         condition: service_healthy
 
 volumes:
+  # Electron supplies RAKAZO_VOLUME_NAMESPACE=rakazo-desktop. Standalone
+  # published-image installs keep the default rakazo namespace.
   pgdata:
+    name: ${RAKAZO_VOLUME_NAMESPACE:-rakazo}_pgdata
+    labels:
+      com.rakazo.persistence: ${RAKAZO_VOLUME_NAMESPACE:-rakazo}-postgres
   appdata:
+    name: ${RAKAZO_VOLUME_NAMESPACE:-rakazo}_appdata
+    labels:
+      com.rakazo.persistence: ${RAKAZO_VOLUME_NAMESPACE:-rakazo}-appdata
 
 networks:
   app:

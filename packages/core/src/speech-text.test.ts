@@ -84,6 +84,10 @@ describe("speakable", () => {
       ]),
     ).toContain("Ship it?");
   });
+
+  it("does not narrate hidden automation context", () => {
+    expect(speechFromBlocks([{ kind: "text", text: "internal", visibility: "hidden" }])).toBe("");
+  });
 });
 
 describe("toUtterances", () => {

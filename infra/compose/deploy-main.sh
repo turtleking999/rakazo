@@ -12,13 +12,28 @@ if [[ -z "${RAKAZO_DEPLOY_DIR:-}" && -r /etc/rakazo/deploy.env ]]; then
 fi
 APP_DIR="${RAKAZO_DEPLOY_DIR:-/srv/rakazo}"
 [[ "${APP_DIR}" == /* ]] || { echo "RAKAZO_DEPLOY_DIR must be an absolute path" >&2; exit 1; }
-COMPOSE_FILE="infra/compose/docker-compose.prod.yml"
+cd "${APP_DIR}"
+env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" .env | tail -n 1
+}
+COMPOSE_FILE_SETTING="${RAKAZO_COMPOSE_FILE:-}"
+COMPOSE_FILE_SETTING="${COMPOSE_FILE_SETTING:-$(env_value RAKAZO_COMPOSE_FILE)}"
+COMPOSE_FILE_SETTING="${COMPOSE_FILE_SETTING:-infra/compose/docker-compose.prod.yml}"
+COMPOSE_PATH_SEPARATOR="${COMPOSE_PATH_SEPARATOR:-$(env_value COMPOSE_PATH_SEPARATOR)}"
+COMPOSE_PATH_SEPARATOR="${COMPOSE_PATH_SEPARATOR:-:}"
+IFS="${COMPOSE_PATH_SEPARATOR}" read -r -a COMPOSE_FILES <<<"${COMPOSE_FILE_SETTING}"
+(( ${#COMPOSE_FILES[@]} > 0 )) || { echo "RAKAZO_COMPOSE_FILE must not be empty" >&2; exit 1; }
+COMPOSE_ARGS=()
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  [[ -n "${compose_file}" ]] || { echo "RAKAZO_COMPOSE_FILE contains an empty entry" >&2; exit 1; }
+  [[ "${compose_file}" != /* ]] || { echo "RAKAZO_COMPOSE_FILE entries must be relative to the checkout" >&2; exit 1; }
+  COMPOSE_ARGS+=("-f" "${compose_file}")
+done
 # CI allows 30 minutes: 15m build + 5m start + ~1m of health retries + 8m rollback.
 BUILD_TIMEOUT="${RAKAZO_DEPLOY_BUILD_TIMEOUT:-15m}"
 UP_TIMEOUT="${RAKAZO_DEPLOY_UP_TIMEOUT:-5m}"
 ROLLBACK_TIMEOUT="${RAKAZO_DEPLOY_ROLLBACK_TIMEOUT:-8m}"
-
-cd "${APP_DIR}"
 if [[ -z "${RAKAZO_HEALTH_URL:-}" ]]; then
   host="$(sed -n 's/^RAKAZO_HOST=//p' .env | tail -n 1)"
   [[ -n "${host}" ]] || { echo "Set RAKAZO_HOST in .env or RAKAZO_HEALTH_URL" >&2; exit 1; }
@@ -28,7 +43,7 @@ fi
 compose() {
   local limit="$1"
   shift
-  timeout --kill-after=30s "${limit}" sudo docker compose --env-file .env -f "${COMPOSE_FILE}" "$@"
+  timeout --kill-after=30s "${limit}" sudo docker compose --env-file .env "${COMPOSE_ARGS[@]}" "$@"
 }
 
 healthy() {
@@ -67,6 +82,9 @@ rollback() {
 trap rollback ERR
 
 git reset --hard "${target_revision}"
+if [[ -x infra/compose/preflight-persistence.sh ]]; then
+  infra/compose/preflight-persistence.sh
+fi
 compose 1m config --quiet
 compose "${BUILD_TIMEOUT}" build
 compose "${UP_TIMEOUT}" up -d --remove-orphans

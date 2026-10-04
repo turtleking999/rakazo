@@ -433,6 +433,23 @@ See [Published images and tags](#published-images-and-tags) for the tag contract
 The root `.env` is excluded from both Git and the Docker build context. The database, application data,
 and Caddy certificates live in named Docker volumes.
 
+Production upgrades must preserve the deployment's volume identity and `.env`. The production Compose
+file names its volumes `rakazo-prod_pgdata`, `rakazo-prod_appdata`, `rakazo-prod_caddydata`, and
+`rakazo-prod_caddyconfig`, independently of the Compose project name. Run the preflight before an
+upgrade; it refuses to start against a missing or relabelled Postgres/application-data volume instead
+of silently creating an empty deployment:
+
+```bash
+sudo RAKAZO_DEPLOY_DIR=/srv/rakazo infra/compose/preflight-persistence.sh
+```
+
+Only a verified first install may set `RAKAZO_ALLOW_VOLUME_CREATE=1`. If an existing deployment was
+created before the volume labels were added, verify the backup and volume contents first, then run
+the preflight once with `RAKAZO_ADOPT_EXISTING_VOLUMES=1`; it records each volume's creation time and
+will reject a later replacement under the same name. Never use `down -v` for a normal stop or
+upgrade. `pnpm compose:down` keeps volumes; the destructive development-only command is
+`RAKAZO_ALLOW_VOLUME_PURGE=1 pnpm compose:purge`.
+
 The production Compose file pins Postgres and Caddy to multi-architecture manifest digests, and the
 published application/updater builds pin their base-image digests. Refresh those pins deliberately
 when taking upstream security updates; changing only the visible major tag does not change the
@@ -440,9 +457,23 @@ content while a digest is present.
 
 For the single-VM production layout, install `infra/compose/backup-prod.sh` as
 `/usr/local/sbin/rakazo-backup` and enable the supplied `rakazo-backup.timer`. It creates a verified
-Postgres custom-format dump plus an application-data archive under `/var/backups/rakazo`, with mode
-`0600` and seven-day rotation. These local snapshots help with operator mistakes but are not a
-substitute for an encrypted off-host backup or provider snapshot.
+Postgres custom-format dump plus an application-data archive and restore manifest under
+`/var/backups/rakazo`, with mode `0600` and seven-day rotation. The manifest deliberately records
+that `.env`/the encryption key must come from the separate encrypted operator secret escrow; the
+backup script never copies secrets into a repository or unencrypted archive. These local snapshots
+help with operator mistakes but are not a substitute for an encrypted off-host backup or provider
+snapshot.
+
+After restoring the original `.env` to the deployment host, restore a snapshot with:
+
+```bash
+sudo RAKAZO_DEPLOY_DIR=/srv/rakazo \
+  infra/compose/restore-prod.sh /var/backups/rakazo/<timestamp>
+```
+
+Restore stops application services, verifies checksums and archive paths, restores Postgres and
+`/data`, then starts the same Compose file list. It refuses to guess a data volume when the API is
+not running. Test this flow on a disposable host before relying on it for production recovery.
 
 The scheduled backup uses `/srv/rakazo` by default. For another deployment directory, set
 `RAKAZO_DEPLOY_DIR=/absolute/path/to/checkout` in a root-owned `/etc/rakazo/backup.env`
@@ -558,6 +589,18 @@ image when possible; if that also fails, they report a possible mixed-version ru
 Source checkouts (not Compose) still upgrade the old way: pull, rebuild with
 `GIT_SHA=$(git rev-parse HEAD)`, run `pnpm --filter @rakazo/db migrate`, then restart API and worker.
 Product contracts stay compatible across cloud and self-hosted.
+
+### Completion webhook
+
+Set both `RAKAZO_WEBHOOK_COMPLETION_URL` and `RAKAZO_WEBHOOK_COMPLETION_SECRET` when an external
+delegation watcher needs the full run result. The worker writes the callback to a PostgreSQL outbox
+in the same transaction as run finalization, then Graphile retries delivery. Requests include the
+full `content` and redacted `blocks`, a stable `Idempotency-Key`, `User-Agent: Rakazo-Webhook/1`,
+and `X-Rakazo-Signature-256`. User-Agent is identification only; verify the HMAC signature.
+
+The inbound routine/bot webhook continues to use its encrypted Bearer secret. When a bot is busy,
+the inbound request is stored as a hidden steering message rather than being dropped or turned into
+a parallel computer run.
 
 ### Space privacy-boundary migration
 

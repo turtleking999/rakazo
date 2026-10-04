@@ -86,6 +86,12 @@ describe("tool card render decisions", () => {
     expect(isRawInboundPayloadBlock(normalBlock)).toBe(false);
     expect(renderableMessageBlocks([rawPayloadBlock, normalBlock], false)).toEqual([normalBlock]);
   });
+
+  it("filters hidden automation context on every client", () => {
+    const hidden: MessageBlock = { kind: "text", text: "automation prompt", visibility: "hidden" };
+    expect(isRawInboundPayloadBlock(hidden)).toBe(true);
+    expect(renderableMessageBlocks([hidden], false)).toEqual([]);
+  });
 });
 
 describe("tool-only narration", () => {

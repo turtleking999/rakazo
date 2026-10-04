@@ -1345,3 +1345,29 @@ model IntegrationProviderConfig {
 
   @@map("integration_provider_configs")
 }
+
+/// Durable inbound/outbound webhook state. Callback credentials stay in the
+/// deployment secret store; outbound payloads are redacted before persistence.
+model WebhookDelivery {
+  id             String    @id @default(cuid())
+  direction      String
+  source         String
+  idempotencyKey String
+  endpoint       String?
+  botId          String?
+  threadId       String?
+  runId          String?
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  payload        Json
+  nextAttemptAt  DateTime  @default(now())
+  deliveredAt    DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([direction, idempotencyKey])
+  @@index([status, nextAttemptAt])
+  @@index([runId, direction])
+  @@map("webhook_deliveries")
+}

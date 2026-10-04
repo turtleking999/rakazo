@@ -38,6 +38,7 @@ verify-report
 .astro
 .deploy.lock
 .last-deployed-revision
+.rakazo-volume-adoption
 design/
 PRODUCT_PLAN.md
 

@@ -277,10 +277,24 @@ services:
         condition: service_started
 
 volumes:
+  # Keep data identity independent of the Compose project name. A renamed project
+  # must not silently boot against a new empty volume.
   pgdata:
+    name: ${RAKAZO_PROD_PGDATA_VOLUME:-rakazo-prod_pgdata}
+    labels:
+      com.rakazo.persistence: production-postgres
   appdata:
+    name: ${RAKAZO_PROD_APPDATA_VOLUME:-rakazo-prod_appdata}
+    labels:
+      com.rakazo.persistence: production-appdata
   caddydata:
+    name: ${RAKAZO_PROD_CADDYDATA_VOLUME:-rakazo-prod_caddydata}
+    labels:
+      com.rakazo.persistence: production-caddydata
   caddyconfig:
+    name: ${RAKAZO_PROD_CADDYCONFIG_VOLUME:-rakazo-prod_caddyconfig}
+    labels:
+      com.rakazo.persistence: production-caddyconfig
 
 networks:
   edge:

@@ -259,6 +259,10 @@ describe("production backup deployment and archive behavior", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Verified Rakazo backup");
+    const snapshot = result.stdout.trim().split("written to ")[1];
+    expect(readFileSync(path.join(snapshot, "MANIFEST"), "utf8")).toContain(
+      "secret_continuity=required",
+    );
     for (const command of f.commands().filter((args) => args[0] === "compose")) {
       expect(command.slice(0, 5)).toEqual([
         "compose",
@@ -276,6 +280,39 @@ describe("production backup deployment and archive behavior", () => {
       "utf8",
     );
     expect(service).toContain("EnvironmentFile=-/etc/rakazo/backup.env");
+  });
+
+  it("keeps ordinary compose shutdown non-destructive", () => {
+    const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    expect(packageJson.scripts["compose:down"]).not.toContain("down -v");
+    expect(packageJson.scripts["compose:purge"]).toContain("compose-purge.sh");
+    expect(readFileSync(path.join(repoRoot, "scripts/compose-purge.sh"), "utf8")).toContain(
+      "RAKAZO_ALLOW_VOLUME_PURGE",
+    );
+  });
+
+  it("pins production volume names and deploys the configured compose file list", () => {
+    const production = readFileSync(
+      path.join(repoRoot, "infra/compose/docker-compose.prod.yml"),
+      "utf8",
+    );
+    const deploy = readFileSync(
+      path.join(repoRoot, "infra/compose/deploy-main.sh"),
+      "utf8",
+    );
+    expect(production).toContain("rakazo-prod_pgdata");
+    expect(production).toContain("production-appdata");
+    expect(deploy).toContain("RAKAZO_COMPOSE_FILE");
+    expect(deploy).toContain("preflight-persistence.sh");
+    const restore = readFileSync(
+      path.join(repoRoot, "infra/compose/restore-prod.sh"),
+      "utf8",
+    );
+    expect(restore).toContain("sha256sum -c");
+    expect(restore).toContain("pg_restore");
+    expect(restore).toContain("restore it from the encrypted operator escrow");
   });
 
   it("rejects relative deployment paths before any backup commands", () => {

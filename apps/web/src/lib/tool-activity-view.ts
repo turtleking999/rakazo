@@ -36,7 +36,8 @@ export function shouldRenderToolCard(block: MessageBlock, showToolActivity: bool
 export function isRawInboundPayloadBlock(block: MessageBlock): boolean {
   return (
     block.kind === "text" &&
-    (block.text.includes("<untrusted_delivery_payload>") ||
+    (block.visibility === "hidden" ||
+      block.text.includes("<untrusted_delivery_payload>") ||
       block.text.includes("<github_event_metadata>") ||
       block.text.startsWith('Run routine "'))
   );
