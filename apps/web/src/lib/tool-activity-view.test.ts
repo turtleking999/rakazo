@@ -2,6 +2,7 @@ import type { MessageBlock } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
   formatToolActivityDuration,
+  isRawInboundPayloadBlock,
   isToolOnlyNarration,
   messageHasVisibleBlocks,
   renderableMessageBlocks,
@@ -70,6 +71,20 @@ describe("tool card render decisions", () => {
     expect(messageHasVisibleBlocks([stepsNoDuration], true)).toBe(true);
     expect(messageHasVisibleBlocks([stepsNoDuration], false)).toBe(false);
     expect(messageHasVisibleBlocks([textBlock], false)).toBe(true);
+  });
+
+  it("filters out raw inbound payload blocks from renderable blocks", () => {
+    const rawPayloadBlock: MessageBlock = {
+      kind: "text",
+      text: 'Run routine "webhook inbox":\nDo something\n<untrusted_delivery_payload>\n{"foo":"bar"}\n</untrusted_delivery_payload>',
+    };
+    expect(isRawInboundPayloadBlock(rawPayloadBlock)).toBe(true);
+    expect(renderableMessageBlocks([rawPayloadBlock], false)).toEqual([]);
+    expect(messageHasVisibleBlocks([rawPayloadBlock], false)).toBe(false);
+
+    const normalBlock: MessageBlock = { kind: "text", text: "Hello there" };
+    expect(isRawInboundPayloadBlock(normalBlock)).toBe(false);
+    expect(renderableMessageBlocks([rawPayloadBlock, normalBlock], false)).toEqual([normalBlock]);
   });
 });
 

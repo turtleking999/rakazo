@@ -33,13 +33,24 @@ export function shouldRenderToolCard(block: MessageBlock, showToolActivity: bool
   return showToolActivity && block.kind === "steps";
 }
 
-/** Blocks that survive into a message render: everything except hidden tool activity. */
+export function isRawInboundPayloadBlock(block: MessageBlock): boolean {
+  return (
+    block.kind === "text" &&
+    (block.text.includes("<untrusted_delivery_payload>") ||
+      block.text.includes("<github_event_metadata>") ||
+      block.text.startsWith('Run routine "'))
+  );
+}
+
+/** Blocks that survive into a message render: everything except hidden tool activity and raw inbound payloads. */
 export function renderableMessageBlocks(
   blocks: readonly MessageBlock[],
   showToolActivity: boolean,
 ): MessageBlock[] {
   return blocks.filter(
-    (block) => !isToolActivityBlock(block) || shouldRenderToolCard(block, showToolActivity),
+    (block) =>
+      (!isToolActivityBlock(block) || shouldRenderToolCard(block, showToolActivity)) &&
+      !isRawInboundPayloadBlock(block),
   );
 }
 
@@ -61,7 +72,5 @@ export function messageHasVisibleBlocks(
   blocks: readonly MessageBlock[],
   showToolActivity: boolean,
 ): boolean {
-  return blocks.some(
-    (block) => !isToolActivityBlock(block) || shouldRenderToolCard(block, showToolActivity),
-  );
+  return renderableMessageBlocks(blocks, showToolActivity).length > 0;
 }

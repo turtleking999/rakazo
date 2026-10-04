@@ -19,7 +19,8 @@ export type WebhookEvents = {
     trigger: "webhook";
     clientNonce?: string;
     allowParallelRun?: boolean;
-  }): Promise<{ messageId: string; runId: string | null; seq: number }>;
+    createMessage?: boolean;
+  }): Promise<{ messageId?: string | null; runId: string | null; seq?: number | null }>;
 };
 
 export type WebhookDeps = {
@@ -235,6 +236,8 @@ export async function deliverWebhookEvent(
     idempotencyKey?: string;
     /** Messaging wakes share the live chat thread; keep a separate webhook run. */
     allowParallelRun?: boolean;
+    /** When false, run the routine/task in the background without creating a visible user chat bubble. Defaults to false. */
+    createMessage?: boolean;
   },
 ) {
   const promptText =
@@ -257,15 +260,18 @@ export async function deliverWebhookEvent(
     ? inboundDeliveryClientNonce(input.source, target.bot.id, input.idempotencyKey)
     : undefined;
 
+  const createMessage = input.createMessage ?? false;
+
   const sent = await deps.events.sendUserMessage({
     spaceId: target.bot.spaceId,
     threadId: target.threadId,
     botId: target.bot.id,
     userId: target.bot.userId,
-    blocks: [{ kind: "text", text: promptText }],
+    blocks: createMessage ? [{ kind: "text", text: promptText }] : [],
     prompt: promptText,
     trigger: "webhook",
     clientNonce,
+    createMessage,
     ...(input.allowParallelRun ? { allowParallelRun: true } : {}),
   });
 

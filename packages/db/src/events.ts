@@ -207,6 +207,8 @@ export interface SendUserMessageInput {
   trigger: "user" | "follow_up" | "webhook" | "messaging";
   clientNonce?: string;
   linkMessageToRun?: boolean;
+  /** When false, run the task without creating a visible user message in thread history (e.g. automated webhooks). */
+  createMessage?: boolean;
   /** When false, persist the user message without starting a run (team-chat transcript). */
   createRun?: boolean;
   /** When true, start a new run even if the bot is already busy (team-chat delivery). */
@@ -348,6 +350,22 @@ export async function sendUserMessage(
 ): Promise<SendUserMessageResult> {
   const replay = async (): Promise<SendUserMessageResult | null> => {
     if (!input.clientNonce) return null;
+    if (input.createMessage === false) {
+      const run = await prisma.run.findFirst({
+        where: {
+          threadId: input.threadId,
+          clientNonce: input.clientNonce,
+        },
+        select: { id: true, taskId: true },
+      });
+      if (!run) return null;
+      return {
+        messageId: "",
+        seq: 0,
+        taskId: run.taskId,
+        runId: run.id,
+      };
+    }
     const message = await prisma.message.findUnique({
       where: {
         threadId_clientNonce: {
@@ -379,12 +397,15 @@ export async function sendUserMessage(
       // transaction. Created in separate transactions, the run could land inside the clear's
       // window and later repopulate the cleared conversation, and a clear could strand the
       // message without its event.
-      const message = await createThreadMessageInTransaction(tx, {
-        threadId: input.threadId,
-        role: "user",
-        blocks: input.blocks,
-        clientNonce: input.clientNonce,
-      });
+      const shouldCreateMessage = input.createMessage !== false;
+      const message = shouldCreateMessage
+        ? await createThreadMessageInTransaction(tx, {
+            threadId: input.threadId,
+            role: "user",
+            blocks: input.blocks,
+            clientNonce: input.clientNonce,
+          })
+        : null;
       const createRun = input.createRun !== false;
       // Include the creation intro. It has no tools, so it must not absorb the message, and a
       // second run would overlap it on a dedicated computer. Pending steering waits for the
@@ -427,42 +448,48 @@ export async function sendUserMessage(
             userId: input.userId,
             status: "queued",
             trigger: input.trigger,
-            clientNonce: input.clientNonce ? `send:${message.id}` : undefined,
-            sourceMessageId: message.id,
+            clientNonce: input.clientNonce
+              ? (message ? `send:${message.id}` : input.clientNonce)
+              : undefined,
+            sourceMessageId: message?.id ?? null,
           },
         });
-        if (input.linkMessageToRun) {
+        if (input.linkMessageToRun && message) {
           await tx.message.update({ where: { id: message.id }, data: { runId: run.id } });
         }
       } else if (createRun && busy) {
-        const held = !isConversationalRun(busy.trigger);
-        await tx.steeringMessage.create({
-          data: {
-            messageId: message.id,
-            botId: input.botId,
-            userId: input.userId,
-            // Keep messaging on the hold so the later run is mirrored back to that app.
-            runId: held ? null : busy.id,
-            ...(held && input.trigger === "messaging" ? { originTrigger: "messaging" } : {}),
-          },
-        });
-        await tx.message.update({ where: { id: message.id }, data: { runId: busy.id } });
+        if (message) {
+          const held = !isConversationalRun(busy.trigger);
+          await tx.steeringMessage.create({
+            data: {
+              messageId: message.id,
+              botId: input.botId,
+              userId: input.userId,
+              // Keep messaging on the hold so the later run is mirrored back to that app.
+              runId: held ? null : busy.id,
+              ...(held && input.trigger === "messaging" ? { originTrigger: "messaging" } : {}),
+            },
+          });
+          await tx.message.update({ where: { id: message.id }, data: { runId: busy.id } });
+        }
       }
-      const event = await appendEventInTransaction(tx, {
-        spaceId: input.spaceId,
-        threadId: input.threadId,
-        botId: input.botId,
-        type: "thread.message.created",
-        runId: run?.id ?? busy?.id,
-        payload: {
-          messageId: message.id,
-          role: "user",
-          blocks: input.blocks,
-          // Carries the call id on the live event so a spoken turn groups into the
-          // call card immediately, instead of after a refetch reads the nonce.
-          callId: callIdFromClientNonce(message.clientNonce),
-        },
-      });
+      const event = message
+        ? await appendEventInTransaction(tx, {
+            spaceId: input.spaceId,
+            threadId: input.threadId,
+            botId: input.botId,
+            type: "thread.message.created",
+            runId: run?.id ?? busy?.id,
+            payload: {
+              messageId: message.id,
+              role: "user",
+              blocks: input.blocks,
+              // Carries the call id on the live event so a spoken turn groups into the
+              // call card immediately, instead of after a refetch reads the nonce.
+              callId: callIdFromClientNonce(message.clientNonce),
+            },
+          })
+        : null;
       return { message, task, run, busy, event };
     });
   const committed = await commit().catch(async (error) => {
@@ -471,13 +498,15 @@ export async function sendUserMessage(
     throw error;
   });
   if ("replay" in committed) return committed.replay;
-  await notifyRealtime(realtime, input.threadId, committed.event.seq).catch((error) => {
-    // The event is durable; subscribers recover it from their persisted cursor.
-    getLogger().error("user message realtime notification", error);
-  });
+  if (committed.event) {
+    await notifyRealtime(realtime, input.threadId, committed.event.seq).catch((error) => {
+      // The event is durable; subscribers recover it from their persisted cursor.
+      getLogger().error("user message realtime notification", error);
+    });
+  }
   return {
-    messageId: committed.message.id,
-    seq: committed.message.seq,
+    messageId: committed.message?.id ?? "",
+    seq: committed.message?.seq ?? 0,
     taskId: committed.task?.id ?? null,
     runId: committed.run?.id ?? committed.busy?.id ?? null,
   };

@@ -6402,7 +6402,7 @@ const MessageView = memo(function MessageView({
   return (
     <>
       {messageContext}
-      {message.blocks.map((block, i) => {
+      {visibleNarrationBlocks.map((block, i) => {
         if (block.kind === "steps" && shouldRenderToolCard(block, showToolActivity)) {
           return (
             <StandaloneToolActivity
