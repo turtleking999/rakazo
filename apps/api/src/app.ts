@@ -434,6 +434,7 @@ export async function createApp(
     web: createWebProvider(),
     cloudAgent,
     shutdownSignal: shutdown.signal,
+    publicApiUrl: env.apiUrl,
   });
 
   const jobHandlers = createBackgroundJobHandlers({

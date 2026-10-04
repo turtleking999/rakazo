@@ -64,6 +64,7 @@ export type RoutineDraftState = {
   name: string;
   prompt: string;
   schedules: CronPreset[];
+  check: string;
   webhookEnabled: boolean;
   githubEnabled: boolean;
   messageProvider: string | null;
@@ -76,6 +77,7 @@ export function emptyRoutineDraft(): RoutineDraftState {
     name: "",
     prompt: "",
     schedules: [],
+    check: "",
     webhookEnabled: false,
     githubEnabled: false,
     messageProvider: null,
@@ -89,6 +91,7 @@ export function draftFromRoutine(routine: Routine): RoutineDraftState {
     name: routine.name,
     prompt: routine.prompt,
     schedules: routine.crons.map(presetFromCron),
+    check: routine.check ?? "",
     webhookEnabled: routine.webhookEnabled,
     githubEnabled: routine.githubEnabled,
     messageProvider: routine.messageProvider,
@@ -365,11 +368,26 @@ export function RoutineEditor({
             </div>
           ))}
 
+          {draft.schedules.length > 0 ? (
+            <label htmlFor={`${fieldId}-check`} className="block text-sm text-muted-foreground">
+              <Trans>Check command</Trans>
+              <Input
+                id={`${fieldId}-check`}
+                type="text"
+                placeholder="e.g. test -s inbox.jsonl && cat inbox.jsonl"
+                value={draft.check}
+                onChange={(e) => onChange({ ...draft, check: e.target.value })}
+                aria-label={t`Check command`}
+                className="mt-2 font-mono text-xs"
+              />
+            </label>
+          ) : null}
+
           {draft.webhookEnabled ? (
             <InboundTriggerCard
               kind="webhook"
               saved={Boolean(editing)}
-              path={webhook.path}
+              path={editing ? `/api/v1/routines/${editing.id}/webhook` : webhook.path}
               secret={webhook.secret}
               configured={webhook.configured}
               onRemove={() => onChange({ ...draft, webhookEnabled: false })}

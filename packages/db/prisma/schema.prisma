@@ -722,6 +722,8 @@ model Routine {
   name           String
   prompt         String
   crons          String[]
+  /// Shell command run on the bot computer before a clock wake; the model runs only when it exits 0 with output.
+  check          String?
   timezone       String    @default("UTC")
   active         Boolean   @default(false)
   notify         Boolean   @default(true)

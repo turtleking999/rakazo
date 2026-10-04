@@ -1,3 +1,4 @@
+import type { SandboxProvider } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
 import { ONCE_ROUTINE_CRON } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
@@ -1611,6 +1612,137 @@ description: Prepare standup notes
           lastRunAt: previousLastRunAt,
         }),
       }),
+    );
+  });
+
+  it("skips run and model token consumption when routine check fails or returns empty", async () => {
+    const scheduledAt = new Date(Date.now() - 1_000);
+    const enqueue = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const $transaction = vi.fn();
+    const sandboxExecute = vi.fn(async function* () {
+      yield { type: "stdout" as const, data: "   \n" };
+      yield { type: "exit" as const, code: 0 };
+    });
+    const prisma = {
+      routine: {
+        findUnique: vi.fn(async () => ({
+          id: "routine-1",
+          spaceId: "ws-1",
+          botId: "bot-1",
+          userId: "user-1",
+          prompt: "process inbox",
+          crons: ["*/5 * * * *"],
+          check: "test -s inbox.jsonl && cat inbox.jsonl",
+          timezone: "UTC",
+          active: true,
+          nextRunAt: scheduledAt,
+          threadId: "thread-1",
+        })),
+        updateMany,
+      },
+      bot: {
+        findUnique: vi.fn(async () => ({
+          id: "bot-1",
+          computerId: "comp-1",
+          thread: { id: "thread-1" },
+        })),
+      },
+      thread: { findFirst: vi.fn(async () => ({ id: "thread-1" })) },
+      $transaction,
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      jobs: { enqueue, cancel: vi.fn(), close: vi.fn() },
+      events: { append: vi.fn() },
+      sandbox: { execute: sandboxExecute } as unknown as SandboxProvider,
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
+
+    expect(sandboxExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "comp-1" }),
+      expect.objectContaining({ argv: ["bash", "-c", "test -s inbox.jsonl && cat inbox.jsonl"] }),
+      expect.anything(),
+    );
+    expect($transaction).not.toHaveBeenCalled();
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "routine-1", active: true },
+        data: expect.objectContaining({ lastRunAt: expect.any(Date), nextRunAt: expect.any(Date) }),
+      }),
+    );
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "routine.wakeup" }),
+    );
+    expect(enqueue).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "run.continue" }),
+    );
+  });
+
+  it("claims the run and attaches untrusted output when routine check passes with content", async () => {
+    const scheduledAt = new Date(Date.now() - 1_000);
+    const enqueue = vi.fn(async () => undefined);
+    const taskCreate = vi.fn(async () => ({ id: "task-1" }));
+    const runCreate = vi.fn(async () => ({ id: "run-1" }));
+    const sandboxExecute = vi.fn(async function* () {
+      yield { type: "stdout" as const, data: '{"event":"job.done","task":"quant-sync"}\n' };
+      yield { type: "exit" as const, code: 0 };
+    });
+    const prisma = {
+      routine: {
+        findUnique: vi.fn(async () => ({
+          id: "routine-1",
+          spaceId: "ws-1",
+          botId: "bot-1",
+          userId: "user-1",
+          prompt: "Report delegation status",
+          crons: ["*/5 * * * *"],
+          check: "cat inbox.jsonl",
+          timezone: "UTC",
+          active: true,
+          nextRunAt: scheduledAt,
+          threadId: "thread-1",
+        })),
+      },
+      bot: {
+        findUnique: vi.fn(async () => ({
+          id: "bot-1",
+          computerId: "comp-1",
+          thread: { id: "thread-1" },
+        })),
+      },
+      thread: { findFirst: vi.fn(async () => ({ id: "thread-1" })) },
+      agentSkill: { findMany: vi.fn(async () => []) },
+      $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({
+          routine: { updateMany: vi.fn(async () => ({ count: 1 })) },
+          task: { create: taskCreate },
+          run: { create: runCreate },
+        }),
+      ),
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      jobs: { enqueue, cancel: vi.fn(), close: vi.fn() },
+      events: { append: vi.fn() },
+      sandbox: { execute: sandboxExecute } as unknown as SandboxProvider,
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
+
+    expect(taskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          prompt: expect.stringMatching(
+            /Report delegation status[\s\S]*\[Check Gate Output\][\s\S]*<check_output>[\s\S]*quant-sync/,
+          ),
+        }),
+      }),
+    );
+    expect(runCreate).toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "run.continue" }),
     );
   });
 

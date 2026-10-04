@@ -5,6 +5,7 @@ import { readBoundedBody } from "./http-body.js";
 import {
   deliverWebhookEvent,
   formatWebhookPrompt,
+  loadRoutineWebhookTarget,
   loadWebhookTarget,
   parseWebhookPayload,
   WEBHOOK_MAX_BODY_BYTES,
@@ -20,6 +21,9 @@ export {
 export {
   formatUntrustedDeliveryPayload,
   formatWebhookPrompt,
+  loadRoutineWebhookTarget,
+  loadWebhookTarget,
+  type RoutineWebhookTarget,
   WEBHOOK_MAX_BODY_BYTES,
   WEBHOOK_SECRET_KIND,
   type WebhookDeps,
@@ -29,6 +33,10 @@ export {
 
 export function webhookPath(botId: string): string {
   return `/api/v1/bots/${botId}/webhook`;
+}
+
+export function routineWebhookPath(routineId: string): string {
+  return `/api/v1/routines/${routineId}/webhook`;
 }
 
 export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
@@ -74,6 +82,39 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
       await deliverWebhookEvent(deps, target, {
         prompt: eventPrompt,
         routines: webhookRoutines,
+        source: "webhook",
+        idempotencyKey,
+      }),
+    );
+  });
+
+  app.post("/api/v1/routines/:routineId/webhook", async (c) => {
+    const unauthorized = () => c.json({ error: "Unauthorized" }, 401);
+
+    const raw = await readBoundedBody(c.req.raw, WEBHOOK_MAX_BODY_BYTES);
+    if (raw === null) {
+      return c.json({ error: "Payload too large" }, 413);
+    }
+
+    const target = await loadRoutineWebhookTarget(deps, c.req.param("routineId"));
+    if (!target || !hasValidBearerToken(c.req.header("authorization"), target.expected)) {
+      return unauthorized();
+    }
+
+    const payload = parseWebhookPayload(raw, c.req.header("content-type"));
+    const eventPrompt = formatWebhookPrompt(payload);
+
+    const idempotencyKey =
+      c.req.header("idempotency-key")?.trim() ||
+      c.req.header("x-idempotency-key")?.trim() ||
+      (typeof payload.id === "string" ? payload.id.trim() : "") ||
+      (typeof payload.event_id === "string" ? payload.event_id.trim() : "") ||
+      undefined;
+
+    return c.json(
+      await deliverWebhookEvent(deps, target, {
+        prompt: eventPrompt,
+        routines: [{ name: target.routine.name, prompt: target.routine.prompt }],
         source: "webhook",
         idempotencyKey,
       }),

@@ -471,3 +471,154 @@ describe("schedule tool persistence", () => {
     );
   });
 });
+
+describe("webhook schedules", () => {
+  function webhookDeps(bot: { webhookSecretId: string | null }) {
+    const create = vi.fn(async (args: { data: Record<string, unknown> }) => ({
+      id: "routine-9",
+      ...args.data,
+    }));
+    const enqueue = vi.fn(async () => undefined);
+    const secretCreate = vi.fn(async () => undefined);
+    const botUpdateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma = {
+      routine: { create },
+      bot: {
+        findUnique: vi.fn(async () => ({
+          id: "bot-1",
+          spaceId: "ws-1",
+          userId: "owner-1",
+          webhookSecretId: bot.webhookSecretId,
+        })),
+        updateMany: botUpdateMany,
+      },
+      secret: {
+        findUnique: vi.fn(async () => ({
+          id: "secret-1",
+          ciphertext: "sealed",
+          kind: "webhook",
+          userId: "owner-1",
+          spaceId: "ws-1",
+        })),
+        create: secretCreate,
+        deleteMany: vi.fn(async () => undefined),
+      },
+      $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
+    };
+    const deps = {
+      prisma,
+      events: { append: vi.fn(async () => undefined) },
+      jobs: { enqueue, cancel: vi.fn(async () => undefined) },
+      secretStore: {
+        load: vi.fn(() => "existing-secret"),
+        put: vi.fn(async (_plain: string) => ({ id: "secret-new", ciphertext: "sealed-new" })),
+      },
+      publicApiUrl: "https://rakazo.example.test/",
+    } as unknown as Parameters<typeof createScheduleFromTool>[0];
+    return { deps, create, enqueue, secretCreate, botUpdateMany };
+  }
+
+  it("creates a push routine bound to the thread and returns its url and secret", async () => {
+    const { deps, create, enqueue, secretCreate } = webhookDeps({ webhookSecretId: "secret-1" });
+
+    const result = await createScheduleFromTool(deps, {
+      spaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Delegation done",
+      prompt: "Summarize what finished",
+      schedule: { webhook: true },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      routineId: "routine-9",
+      trigger: "webhook",
+      webhook: {
+        url: "https://rakazo.example.test/api/v1/routines/routine-9/webhook",
+        method: "POST",
+        authorization: "Bearer existing-secret",
+      },
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        threadId: "thread-1",
+        crons: [],
+        webhookEnabled: true,
+        active: true,
+        nextRunAt: null,
+      }),
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(secretCreate).not.toHaveBeenCalled();
+  });
+
+  it("provisions the bot webhook secret once when none exists", async () => {
+    const { deps, secretCreate, botUpdateMany } = webhookDeps({ webhookSecretId: null });
+
+    const result = await createScheduleFromTool(deps, {
+      spaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Hook",
+      prompt: "Report",
+      schedule: { webhook: true },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(secretCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: "secret-new",
+        kind: "webhook",
+        userId: "owner-1",
+        spaceId: "ws-1",
+      }),
+    });
+    expect(botUpdateMany).toHaveBeenCalledWith({
+      where: { id: "bot-1", webhookSecretId: null },
+      data: { webhookSecretId: "secret-new" },
+    });
+    const webhook = (result as { webhook: { authorization: string } }).webhook;
+    expect(webhook.authorization).toMatch(/^Bearer \S{20,}$/);
+  });
+
+  it("rejects mixing webhook with a clock or a check", async () => {
+    const { deps } = webhookDeps({ webhookSecretId: "secret-1" });
+    const base = {
+      spaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Hook",
+      prompt: "Report",
+    };
+    await expect(
+      createScheduleFromTool(deps, { ...base, schedule: { webhook: true, cron: "0 * * * *" } }),
+    ).resolves.toHaveProperty("error");
+    await expect(
+      createScheduleFromTool(deps, { ...base, check: "cat inbox", schedule: { webhook: true } }),
+    ).resolves.toHaveProperty("error");
+  });
+
+  it("stores a check command on clock routines", async () => {
+    const { deps, create } = webhookDeps({ webhookSecretId: "secret-1" });
+
+    const result = await createScheduleFromTool(deps, {
+      spaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Inbox",
+      prompt: "Report new lines",
+      check: "  test -s inbox.jsonl && cat inbox.jsonl  ",
+      schedule: { every: 1, unit: "minutes" },
+    });
+
+    expect(result).toMatchObject({ ok: true, check: "test -s inbox.jsonl && cat inbox.jsonl" });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ check: "test -s inbox.jsonl && cat inbox.jsonl" }),
+    });
+  });
+});

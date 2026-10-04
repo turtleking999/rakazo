@@ -3025,6 +3025,7 @@ export function createRouter(deps: RouterDeps) {
             name: input.name,
             prompt: input.prompt,
             crons: input.crons,
+            check: input.check ?? null,
             timezone: input.timezone,
             notify: input.notify,
             active: input.active,
@@ -3134,6 +3135,7 @@ export function createRouter(deps: RouterDeps) {
               name: input.name,
               prompt: input.prompt,
               crons: input.crons,
+              check: input.check,
               timezone: input.timezone,
               active: input.active,
               notify: input.notify,
@@ -6185,6 +6187,7 @@ function mapRoutine(row: {
   name: string;
   prompt: string;
   crons: string[];
+  check?: string | null;
   timezone: string;
   active: boolean;
   notify: boolean;
@@ -6201,6 +6204,7 @@ function mapRoutine(row: {
     name: row.name,
     prompt: row.prompt,
     crons: row.crons,
+    check: row.check ?? null,
     timezone: row.timezone,
     active: row.active,
     notify: row.notify,

@@ -85,6 +85,7 @@ const scheduleTimingNames = [
   "runAt",
   "delayMinutes",
   "delaySeconds",
+  "webhook",
 ] as const;
 
 /**
@@ -93,6 +94,10 @@ const scheduleTimingNames = [
  */
 const blankScheduleTiming = {
   anyOf: [{ type: "null" }, { type: "string", pattern: "^\\s*$" }],
+};
+
+const blankWebhookTiming = {
+  anyOf: [...blankScheduleTiming.anyOf, { type: "boolean", enum: [false] }],
 };
 
 const scheduleTimingSpecs = {
@@ -112,13 +117,32 @@ const scheduleTimingSpecs = {
     type: "number",
     description: "Seconds from now for a one-shot schedule (may be under one minute).",
   },
+  webhook: {
+    type: "boolean",
+    enum: [true],
+    description:
+      "Run only when something POSTs to this routine's URL (no clock, no idle cost). The result returns url and authorization header to give the sender; the JSON body reaches the prompt as data.",
+  },
+};
+
+const scheduleCheckSpec = {
+  type: "string",
+  description:
+    "Optional shell command run on your computer before each clock run, without the model. The run starts only if it exits 0 and prints something; that output is appended to the prompt. Use it whenever a clock schedule polls for work (files, queues, APIs) so empty checks cost no tokens. Make it consume what it prints so the next run does not repeat it.",
 };
 
 function scheduleCreateBranch(active: readonly (keyof typeof scheduleTimingSpecs)[]) {
   const activeNames = new Set<string>(active);
-  const properties: Record<string, unknown> = { ...scheduleCreateProperties };
+  const properties: Record<string, unknown> = {
+    ...scheduleCreateProperties,
+    check: activeNames.has("webhook") ? blankScheduleTiming : scheduleCheckSpec,
+  };
   for (const name of scheduleTimingNames) {
-    properties[name] = activeNames.has(name) ? scheduleTimingSpecs[name] : blankScheduleTiming;
+    properties[name] = activeNames.has(name)
+      ? scheduleTimingSpecs[name]
+      : name === "webhook"
+        ? blankWebhookTiming
+        : blankScheduleTiming;
   }
   return {
     type: "object",
@@ -136,6 +160,7 @@ const scheduleCreateInputSchema = {
     scheduleCreateBranch(["runAt"]),
     scheduleCreateBranch(["delayMinutes"]),
     scheduleCreateBranch(["delaySeconds"]),
+    scheduleCreateBranch(["webhook"]),
   ],
 };
 
@@ -738,7 +763,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "schedule_create",
     description:
-      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute). One-shot: runAt, delayMinutes, or delaySeconds.',
+      'Create a reminder, recurring job, or push-triggered routine for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute). One-shot: runAt, delayMinutes, or delaySeconds. When another machine or service should notify this chat, use webhook: true instead of a clock that polls. If a clock must poll for work, set check so idle runs never start.',
     inputSchema: scheduleCreateInputSchema,
   },
   {

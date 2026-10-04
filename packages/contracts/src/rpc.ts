@@ -469,6 +469,7 @@ export const appContract = {
             name: z.string().optional(),
             prompt: z.string().optional(),
             crons: z.array(z.string().min(1)).optional(),
+            check: z.string().max(4000).nullable().optional(),
             timezone: z.string().optional(),
             active: z.boolean().optional(),
             notify: z.boolean().optional(),

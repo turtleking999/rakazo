@@ -8,6 +8,8 @@ import {
   ONCE_ROUTINE_CRON,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { WebhookSecretDeps } from "./webhook-secret.js";
+import { ensureBotWebhookSecret, routineWebhookPath } from "./webhook-secret.js";
 
 export { isOneShotRoutineCron, ONCE_ROUTINE_CRON };
 
@@ -197,6 +199,33 @@ export interface ScheduleToolDeps {
   prisma: PrismaClient;
   events: ThreadEvents;
   jobs: JobPublisher;
+  /** Needed to hand out the push endpoint secret; absent means webhook routines are unavailable. */
+  secretStore?: WebhookSecretDeps["secretStore"];
+  /** Public API origin used to turn webhook paths into full URLs. */
+  publicApiUrl?: string;
+}
+
+export const ROUTINE_CHECK_MAX_CHARS = 4_000;
+
+function normalizeCheck(value: unknown): string | null | { error: string } {
+  if (!isScheduleValueProvided(value)) return null;
+  if (typeof value !== "string") return { error: "check must be a shell command string." };
+  const check = value.trim();
+  if (check.length > ROUTINE_CHECK_MAX_CHARS) {
+    return { error: `check must be at most ${ROUTINE_CHECK_MAX_CHARS} characters.` };
+  }
+  return check;
+}
+
+function webhookDetails(deps: Pick<ScheduleToolDeps, "publicApiUrl">, routineId: string, secret: string) {
+  const path = routineWebhookPath(routineId);
+  const origin = deps.publicApiUrl?.trim().replace(/\/+$/, "");
+  return {
+    url: origin ? `${origin}${path}` : path,
+    method: "POST" as const,
+    authorization: `Bearer ${secret}`,
+    contentType: "application/json",
+  };
 }
 
 /** Persist and enqueue a bot routine that wakes in the originating thread. */
@@ -210,6 +239,7 @@ export async function createScheduleFromTool(
     name: string;
     prompt: string;
     timezone?: string;
+    check?: string;
     schedule: Record<string, unknown>;
   },
 ) {
@@ -217,9 +247,22 @@ export async function createScheduleFromTool(
   const prompt = input.prompt.trim();
   if (!name) return { error: "name is required." };
   if (!prompt) return { error: "prompt is required." };
+  const check = normalizeCheck(input.check);
+  if (check && typeof check === "object") return check;
+
+  const { webhook, ...timing } = input.schedule;
+  if (webhook === true || webhook === "true") {
+    if (Object.keys(compactScheduleInput(timing)).length > 0) {
+      return { error: "A webhook routine runs on push; do not also give it a clock schedule." };
+    }
+    if (check) {
+      return { error: "check only applies to clock schedules; webhook routines already run only on push." };
+    }
+    return createWebhookRoutine(deps, { ...input, name, prompt });
+  }
 
   const timezone = String(input.timezone ?? "UTC");
-  const resolved = resolveScheduleTiming(input.schedule, timezone);
+  const resolved = resolveScheduleTiming(timing, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
   const row = await deps.prisma.routine.create({
@@ -231,6 +274,7 @@ export async function createScheduleFromTool(
       name,
       prompt,
       crons: [resolved.cron],
+      ...(check ? { check } : {}),
       timezone,
       notify: true,
       active: true,
@@ -253,17 +297,7 @@ export async function createScheduleFromTool(
     return { error: "Could not schedule the reminder. Try again." };
   }
 
-  try {
-    await deps.events.append({
-      spaceId: input.spaceId,
-      threadId: input.threadId,
-      botId: input.botId,
-      type: "routine.created",
-      payload: { name: row.name },
-    });
-  } catch {
-    // Match routines.create: the reminder is live even if the thread signal fails.
-  }
+  await appendRoutineCreated(deps, input, row.name);
 
   return {
     ok: true as const,
@@ -272,12 +306,74 @@ export async function createScheduleFromTool(
     cron: row.crons[0],
     nextRunAt: row.nextRunAt?.toISOString() ?? null,
     oneShot: resolved.oneShot,
+    ...(check ? { check } : {}),
+  };
+}
+
+async function appendRoutineCreated(
+  deps: Pick<ScheduleToolDeps, "events">,
+  input: { spaceId: string; threadId: string; botId: string },
+  name: string,
+) {
+  try {
+    await deps.events.append({
+      spaceId: input.spaceId,
+      threadId: input.threadId,
+      botId: input.botId,
+      type: "routine.created",
+      payload: { name },
+    });
+  } catch {
+    // Match routines.create: the routine is live even if the thread signal fails.
+  }
+}
+
+async function createWebhookRoutine(
+  deps: ScheduleToolDeps,
+  input: {
+    spaceId: string;
+    botId: string;
+    userId: string;
+    threadId: string;
+    name: string;
+    prompt: string;
+    timezone?: string;
+  },
+) {
+  if (!deps.secretStore) return { error: "Webhook routines are not available here." };
+  const secret = await ensureBotWebhookSecret(
+    { prisma: deps.prisma, secretStore: deps.secretStore },
+    input.botId,
+  );
+  const row = await deps.prisma.routine.create({
+    data: {
+      spaceId: input.spaceId,
+      botId: input.botId,
+      userId: input.userId,
+      threadId: input.threadId,
+      name: input.name,
+      prompt: input.prompt,
+      crons: [],
+      timezone: String(input.timezone ?? "UTC"),
+      notify: true,
+      active: true,
+      webhookEnabled: true,
+      nextRunAt: null,
+    },
+  });
+  await appendRoutineCreated(deps, input, row.name);
+  return {
+    ok: true as const,
+    routineId: row.id,
+    name: row.name,
+    trigger: "webhook" as const,
+    webhook: webhookDetails(deps, row.id, secret),
   };
 }
 
 /** List bot routines, optionally restricted to the current group thread. */
 export async function listSchedulesFromTool(
-  deps: Pick<ScheduleToolDeps, "prisma">,
+  deps: Pick<ScheduleToolDeps, "prisma" | "secretStore" | "publicApiUrl">,
   input: { spaceId: string; botId: string; userId: string; threadId?: string },
 ) {
   const rows = await deps.prisma.routine.findMany({
@@ -289,6 +385,13 @@ export async function listSchedulesFromTool(
     },
     orderBy: { createdAt: "desc" },
   });
+  let secret: string | null = null;
+  if (deps.secretStore && rows.some((row) => row.webhookEnabled)) {
+    secret = await ensureBotWebhookSecret(
+      { prisma: deps.prisma, secretStore: deps.secretStore },
+      input.botId,
+    ).catch(() => null);
+  }
   return {
     routines: rows.map((row) => ({
       routineId: row.id,
@@ -298,6 +401,8 @@ export async function listSchedulesFromTool(
       active: row.active,
       nextRunAt: row.nextRunAt?.toISOString() ?? null,
       oneShot: isOneShotRoutineCrons(row.crons),
+      ...(row.check ? { check: row.check } : {}),
+      ...(row.webhookEnabled && secret ? { webhook: webhookDetails(deps, row.id, secret) } : {}),
     })),
   };
 }

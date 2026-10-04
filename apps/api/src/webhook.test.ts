@@ -28,6 +28,21 @@ function createDeps(
     secret?: { ciphertext: string; kind: string; userId: string; spaceId: string } | null;
     load?: (ciphertext: string) => string;
     routines?: Array<{ id: string; name: string; prompt: string }>;
+    routine?: {
+      id: string;
+      name: string;
+      prompt: string;
+      threadId?: string | null;
+      webhookEnabled: boolean;
+      bot: {
+        id: string;
+        spaceId: string;
+        userId: string;
+        archivedAt: Date | null;
+        webhookSecretId: string | null;
+        thread: { id: string } | null;
+      };
+    } | null;
   } = {},
 ): WebhookDeps & {
   sendUserMessage: ReturnType<typeof vi.fn>;
@@ -54,6 +69,25 @@ function createDeps(
         }
       : overrides.secret;
 
+  const routine =
+    overrides.routine === undefined
+      ? {
+          id: "routine-1",
+          name: "Delegation done",
+          prompt: "Summarize results",
+          threadId: "custom-thread-99",
+          webhookEnabled: true,
+          bot: {
+            id: "bot-1",
+            spaceId: "ws-1",
+            userId: "user-1",
+            archivedAt: null,
+            webhookSecretId: "secret-1",
+            thread: { id: "thread-1" },
+          },
+        }
+      : overrides.routine;
+
   const sendUserMessage = vi.fn(async () => ({
     messageId: "msg-1",
     runId: "run-1",
@@ -72,6 +106,7 @@ function createDeps(
       },
       routine: {
         findMany: findRoutines,
+        findUnique: vi.fn(async () => routine),
       },
     } as unknown as WebhookDeps["prisma"],
     secrets: {
@@ -413,6 +448,80 @@ describe("inbound webhook HTTP route", () => {
       expect(cancelStarted).toBe(true);
     },
   );
+});
+
+describe("routine-specific webhook HTTP route", () => {
+  it("rejects missing authorization", async () => {
+    const deps = createDeps();
+    const app = mount(deps);
+    const res = await app.request("/api/v1/routines/routine-1/webhook", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "task.done" }),
+    });
+    expect(res.status).toBe(401);
+    expect(deps.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects wrong bearer secret", async () => {
+    const deps = createDeps();
+    const app = mount(deps);
+    const res = await app.request("/api/v1/routines/routine-1/webhook", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer wrong-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ event: "task.done" }),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expect(deps.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing or inactive routines with 401", async () => {
+    const deps = createDeps({ routine: null });
+    const app = mount(deps);
+    const res = await app.request("/api/v1/routines/missing/webhook", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${SECRET}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ event: "task.done" }),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("accepts valid bearer secret and delivers to the routine thread with its prompt", async () => {
+    const deps = createDeps();
+    const app = mount(deps);
+    const res = await app.request("/api/v1/routines/routine-1/webhook", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${SECRET}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ event: "delegation.complete", result: "all tests pass" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      messageId: "msg-1",
+      runId: "run-1",
+      seq: 3,
+    });
+    expect(deps.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: "bot-1",
+        threadId: "custom-thread-99",
+        trigger: "webhook",
+        prompt: expect.stringContaining('Run routine "Delegation done":\nSummarize results'),
+      }),
+    );
+    expect(deps.enqueue).toHaveBeenCalled();
+  });
 });
 
 describe("GitHub event HTTP route", () => {

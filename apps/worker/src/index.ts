@@ -203,6 +203,7 @@ async function main() {
     messaging: messaging ? createMessagingContextLoader(prisma) : undefined,
     web: createWebProvider(),
     cloudAgent,
+    publicApiUrl: process.env.API_URL,
   });
 
   const jobHandlers = createBackgroundJobHandlers({

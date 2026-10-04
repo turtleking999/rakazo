@@ -134,6 +134,83 @@ export async function loadWebhookTarget(
   };
 }
 
+export type RoutineWebhookTarget = {
+  routine: {
+    id: string;
+    name: string;
+    prompt: string;
+  };
+  bot: {
+    id: string;
+    spaceId: string;
+    userId: string;
+    webhookSecretId: string;
+  };
+  threadId: string;
+  expected: string;
+};
+
+/** Load the target for a routine-specific webhook endpoint. */
+export async function loadRoutineWebhookTarget(
+  deps: Pick<WebhookDeps, "prisma" | "secrets">,
+  routineId: string,
+): Promise<RoutineWebhookTarget | null> {
+  const routine = await deps.prisma.routine.findUnique({
+    where: { id: routineId, active: true },
+    select: {
+      id: true,
+      name: true,
+      prompt: true,
+      threadId: true,
+      webhookEnabled: true,
+      bot: {
+        select: {
+          id: true,
+          spaceId: true,
+          userId: true,
+          archivedAt: true,
+          webhookSecretId: true,
+          thread: { select: { id: true } },
+        },
+      },
+    },
+  });
+
+  if (!routine || !routine.webhookEnabled || routine.bot.archivedAt) return null;
+  const bot = routine.bot;
+  const targetThreadId = routine.threadId ?? bot.thread?.id;
+  if (!targetThreadId || !bot.webhookSecretId) return null;
+
+  const secret = await deps.prisma.secret.findUnique({
+    where: { id: bot.webhookSecretId },
+    select: { id: true, ciphertext: true, kind: true, userId: true, spaceId: true },
+  });
+  if (!secret || secret.kind !== WEBHOOK_SECRET_KIND) return null;
+  if (secret.userId !== bot.userId || secret.spaceId !== bot.spaceId) return null;
+
+  let expected: string;
+  try {
+    expected = deps.secrets.load(secret.ciphertext, secret.id);
+  } catch {
+    return null;
+  }
+  return {
+    routine: {
+      id: routine.id,
+      name: routine.name,
+      prompt: routine.prompt,
+    },
+    bot: {
+      id: bot.id,
+      spaceId: bot.spaceId,
+      userId: bot.userId,
+      webhookSecretId: bot.webhookSecretId,
+    },
+    threadId: targetThreadId,
+    expected,
+  };
+}
+
 /** Idempotency key shared by messaging wakes and TeamChat duplicate-skip lookups. */
 export function messagingWakeIdempotencyKey(provider: string, handle: string): string {
   return `${provider}:${handle}`;
